@@ -1,0 +1,20 @@
+﻿<Application x:Class="CopilotSessionTray.App.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:CopilotSessionTray.App"
+             ShutdownMode="OnExplicitShutdown">
+    <!--
+        No StartupUri: this is a tray-only app. MainWindow is constructed in
+        code-behind (App.xaml.cs) purely to host the TaskbarIcon, and is
+        never shown at launch — it only appears as the popup when the tray
+        icon is clicked (see MainWindow.xaml.cs).
+
+        ShutdownMode="OnExplicitShutdown": without this, WPF's default
+        (OnLastWindowClose) would quit the whole app the first time the
+        popup window closes/hides. Quitting is only ever done via the tray
+        context menu's "Quit" command (TrayViewModel.QuitCommand).
+    -->
+    <Application.Resources>
+
+    </Application.Resources>
+</Application>
