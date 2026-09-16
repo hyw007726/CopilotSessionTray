@@ -21,19 +21,49 @@ public sealed partial class SessionItemViewModel : ObservableObject
         SessionStatus status,
         string detail,
         TimeSpan elapsed,
-        bool isUnread)
+        bool isUnread,
+        string? workingDirectory = null)
     {
         Id = id;
-        DisplayName = displayName;
+        _displayName = displayName;
         Status = status;
         Detail = detail;
         Elapsed = elapsed;
         _isUnread = isUnread;
+        WorkingDirectory = workingDirectory;
+
+        // Demo stand-in for what Phase 2 would source from Copilot CLI's own
+        // last checkpoint overview (ISessionHistoryStore.GetCheckpointsAsync)
+        // — see ISessionLauncher.StartNewSessionFromSummaryAsync.
+        Summary = $"Summary of prior work on {displayName}: {detail} (last status: {StatusLabelFor(status)}).";
     }
 
     public string Id { get; }
 
-    public string DisplayName { get; }
+    /// <summary>
+    /// The directory this session was started from, if known — mirrors
+    /// <see cref="Core.Models.SessionSummary.Cwd"/>, used by "resume in
+    /// terminal" so the new pane opens in the right place.
+    /// </summary>
+    public string? WorkingDirectory { get; }
+
+    /// <summary>
+    /// A short AI-written recap of the session, sourced from Copilot CLI's
+    /// own checkpoints in the real implementation — this app never
+    /// generates it itself. Fixed at construction, independent of any later
+    /// local rename via <see cref="DisplayName"/>.
+    /// </summary>
+    public string Summary { get; }
+
+    /// <summary>
+    /// This app's own local label for the session — renameable by the user
+    /// (see the summary panel). Purely a local override kept via
+    /// <c>IAppStateStore</c>; never renames the real Copilot CLI session
+    /// (which has its own separate <c>/rename</c> concept this app never
+    /// touches, per Core's read-only-against-<c>.copilot</c> rule).
+    /// </summary>
+    [ObservableProperty]
+    private string _displayName;
 
     public SessionStatus Status { get; }
 
@@ -45,7 +75,9 @@ public sealed partial class SessionItemViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(UnreadDotVisibility))]
     private bool _isUnread;
 
-    public string StatusLabel => Status switch
+    public string StatusLabel => StatusLabelFor(Status);
+
+    private static string StatusLabelFor(SessionStatus status) => status switch
     {
         SessionStatus.Working => "Working",
         SessionStatus.WaitingForInput => "Waiting for input",
