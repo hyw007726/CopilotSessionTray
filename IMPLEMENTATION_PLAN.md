@@ -130,6 +130,12 @@ tray UI.
 - **Per-session status**: `Working` → `WaitingForInput` (finished, not yet
   read) → `Read` (acknowledged) → `Closed` (process gone / `session.shutdown`
   seen).
+- **Signal authority (see §9 "stuck state" risk)**: `open-sessions-state.json`'s
+  own `working`/`refreshedAt` fields (+ `IProcessLivenessChecker`) are the
+  authoritative source for whether a session is *currently* Working —
+  `events.jsonl` is used for richer detail (what it's doing, unread
+  detection) but must never be the sole way a session leaves the Working
+  state, so a missed/unexpected event type can't leave it stuck.
 - **Unread** = a `WaitingForInput` session the user hasn't opened/dismissed
   in the tray since its last completion event.
 
@@ -290,6 +296,7 @@ CopilotSessionTray\
 
 | Risk | Mitigation |
 |---|---|
+| **State machine gets stuck** if `ISessionDetectionEngine` derives "session left Working" only from specific `events.jsonl` event types, and some real exit path (crash, an unusual autopilot completion, `session.shutdown` without a clean prior turn-end) never emits one — the exact bug found in GitHub's own official taskbar-presence feature (a session's taskbar card stuck spinning forever because the transition was only wired to `session.idle`, which some completion paths don't emit; see [github/copilot-cli#4771](https://github.com/github/copilot-cli/issues/4771)). | Never let `events.jsonl`-derived state be the sole authority for Working/Idle (see §3 "Signal authority"): re-derive it from `open-sessions-state.json`'s own `working`/`refreshedAt` fields + `IProcessLivenessChecker` on every poll, so a stuck/incomplete event-derived state self-corrects on the next cycle instead of persisting. Treat `events.jsonl` as detail/enrichment only. |
 | On-disk formats are undocumented and may change across Copilot CLI versions | Defensive parsing (ignore unknown fields/event types), version-guard against `config.json` if it reports a version, log-and-skip instead of crashing. |
 | `session-store.db` locked/busy while CLI writes (WAL) | Always open read-only; retry with backoff on `SQLITE_BUSY`; never treat this DB as the real-time signal (use it for history metadata only). |
 | `FileSystemWatcher` misses rapid/atomic writes | Pair with a periodic fallback poll (~10s). |
