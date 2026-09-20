@@ -366,7 +366,13 @@ public sealed partial class TrayViewModel : ObservableObject
     [RelayCommand]
     private void Quit() => Application.Current.Shutdown();
 
-    /// <summary>Replaces <see cref="Sessions"/> with one of a few fixed fake scenarios, cycling on each call.</summary>
+    /// <summary>
+    /// Replaces <see cref="Sessions"/> with one of a few fixed fake scenarios, cycling on each call.
+    ///
+    /// IMPORTANT: this repo is pushed to the author's personal GitHub account, not an employer's —
+    /// keep all demo data, fixtures, and comments limited to clearly generic placeholders (e.g.
+    /// "acme/...", "octocat/...", "sample-org/...") and never real company/product/repo names.
+    /// </summary>
     private void LoadDemoScenario(int index)
     {
         Sessions.Clear();
@@ -375,11 +381,11 @@ public sealed partial class TrayViewModel : ObservableObject
         {
             case 0: // Mixed — a "typical" moment.
                 Sessions.Add(new SessionItemViewModel(
-                    "demo-1", "CubicTelecom/VerizonService", SessionStatus.Working,
-                    "Investigating flaky CancelSubscription system test…", TimeSpan.FromMinutes(3), isUnread: false));
+                    "demo-1", "acme/widget-api", SessionStatus.Working,
+                    "Investigating flaky retry logic in the checkout test suite…", TimeSpan.FromMinutes(3), isUnread: false));
                 Sessions.Add(new SessionItemViewModel(
-                    "demo-2", "CubicTelecom/MnoDomain.SystemTests", SessionStatus.Finished,
-                    "Added missing xRetry.Reqnroll package reference.", TimeSpan.FromMinutes(21), isUnread: true));
+                    "demo-2", "sample-org/inventory-service", SessionStatus.Finished,
+                    "Added missing test fixture reference.", TimeSpan.FromMinutes(21), isUnread: true));
                 Sessions.Add(new SessionItemViewModel(
                     "demo-3", "CopilotSessionTray", SessionStatus.WaitingForInput,
                     "Reviewed IMPLEMENTATION_PLAN.md Phase 0.5 contracts.", TimeSpan.FromHours(1), isUnread: false,
@@ -388,16 +394,16 @@ public sealed partial class TrayViewModel : ObservableObject
 
             case 1: // Everything idle.
                 Sessions.Add(new SessionItemViewModel(
-                    "demo-4", "CubicTelecom/CustomerProfile", SessionStatus.WaitingForInput,
+                    "demo-4", "acme/billing-service", SessionStatus.WaitingForInput,
                     "Waiting on next instruction.", TimeSpan.FromMinutes(9), isUnread: false));
                 break;
 
             case 2: // Needs attention — multiple unread.
                 Sessions.Add(new SessionItemViewModel(
-                    "demo-5", "CubicTelecom/ES2Service", SessionStatus.Finished,
+                    "demo-5", "sample-org/reporting-tool", SessionStatus.Finished,
                     "Build succeeded, 0 errors.", TimeSpan.FromMinutes(4), isUnread: true));
                 Sessions.Add(new SessionItemViewModel(
-                    "demo-6", "CubicTelecom/Integration.Verizon.eUICC", SessionStatus.Finished,
+                    "demo-6", "octocat/hello-world", SessionStatus.Finished,
                     "Applied requested review changes.", TimeSpan.FromMinutes(46), isUnread: true));
                 break;
 
@@ -406,7 +412,7 @@ public sealed partial class TrayViewModel : ObservableObject
 
             case 4: // Actively working, nothing unread yet — exercises the tray icon's "working" dot.
                 Sessions.Add(new SessionItemViewModel(
-                    "demo-7", "CubicTelecom/ServiceProfile", SessionStatus.Working,
+                    "demo-7", "sample-org/notification-service", SessionStatus.Working,
                     "Refactoring retry policy configuration…", TimeSpan.FromSeconds(45), isUnread: false));
                 break;
         }

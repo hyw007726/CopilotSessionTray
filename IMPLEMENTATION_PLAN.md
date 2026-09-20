@@ -3,6 +3,13 @@
 Status: **Phase 1 done — tray shell built with fake/static data; Phase 0.5 contracts still pending your review**
 Scope: personal local-use desktop utility (Windows)
 
+> **⚠️ Privacy reminder (applies to every phase, not just today's demo data):**
+> this repo is hosted on the author's **personal** GitHub account, not an
+> employer's. Demo/fake data, test fixtures, code comments, commit messages,
+> and screenshots must never reference real company names, internal
+> repos/projects, or other employer-identifying details. Use clearly generic
+> placeholders instead (e.g. `acme/...`, `octocat/...`, `sample-org/...`).
+
 ## 1. Problem statement
 
 GitHub Copilot CLI sessions run as independent background processes with no
@@ -332,6 +339,13 @@ CopilotSessionTray\
 
 ## 11. Open assumptions to confirm before/while implementing
 
+- **No employer-identifying information anywhere in this repo** (demo data,
+  fixtures, comments, commit messages, screenshots) — this is pushed to the
+  author's personal GitHub account, not a work one. Use generic placeholder
+  org/repo names (`acme/...`, `octocat/...`, `sample-org/...`) for anything
+  that looks like a repo or project name. Phase 1's demo data in
+  `TrayViewModel.LoadDemoScenario` already follows this; keep it that way
+  when Phase 2 adds fixture files for `Core.Tests` too.
 - Tech stack defaulted to **.NET 10 WPF (MVVM) + `H.NotifyIcon.Wpf`**
   (originally planned as .NET 8, but only .NET 9/10 SDKs were installed when
   scaffolding started, and .NET 10 is the current LTS — see the skeleton's
