@@ -90,7 +90,8 @@ public sealed partial class SessionItemViewModel : ObservableObject
     {
         { TotalMinutes: < 1 } => $"{Elapsed.Seconds}s",
         { TotalHours: < 1 } => $"{(int)Elapsed.TotalMinutes}m",
-        _ => $"{(int)Elapsed.TotalHours}h {Elapsed.Minutes}m",
+        { TotalDays: < 1 } => $"{(int)Elapsed.TotalHours}h {Elapsed.Minutes}m",
+        _ => $"{(int)Elapsed.TotalDays}d {Elapsed.Hours}h",
     };
 
     public Brush StatusBrush => Status switch

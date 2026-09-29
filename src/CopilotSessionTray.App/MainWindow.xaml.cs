@@ -1,6 +1,7 @@
 ﻿using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Threading;
 using CopilotSessionTray.App.ViewModels;
 
 namespace CopilotSessionTray.App;
@@ -10,9 +11,23 @@ namespace CopilotSessionTray.App;
 /// </summary>
 public partial class MainWindow : Window
 {
+    // Windows sends a left-mouse-up for *each* click of a double-click, in addition to the
+    // distinct double-click message — confirmed via H.NotifyIcon's own source (it just relays the
+    // underlying WM_LBUTTONUP/WM_LBUTTONDBLCLK sequence): TrayLeftMouseUp fires twice before
+    // TrayLeftMouseDoubleClick also fires. Debounce with a short timer, standard practice for
+    // this exact tray-icon ambiguity, so a double-click doesn't also toggle the popup open/shut
+    // right before the "start new task" window appears on top of it.
+    private readonly DispatcherTimer _singleClickTimer;
+
     public MainWindow()
     {
         InitializeComponent();
+        _singleClickTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+        _singleClickTimer.Tick += (_, _) =>
+        {
+            _singleClickTimer.Stop();
+            TogglePopup();
+        };
     }
 
     /// <summary>
@@ -33,7 +48,20 @@ public partial class MainWindow : Window
         Hide();
     }
 
-    private void TrayIcon_TrayLeftMouseUp(object sender, RoutedEventArgs e) => TogglePopup();
+    private void TrayIcon_TrayLeftMouseUp(object sender, RoutedEventArgs e)
+    {
+        _singleClickTimer.Stop();
+        _singleClickTimer.Start();
+    }
+
+    private void TrayIcon_TrayLeftMouseDoubleClick(object sender, RoutedEventArgs e)
+    {
+        _singleClickTimer.Stop(); // cancel the pending single-click popup toggle.
+        if (DataContext is TrayViewModel viewModel)
+        {
+            viewModel.StartYoloTaskCommand.Execute(null);
+        }
+    }
 
     private void ShowSessions_Click(object sender, RoutedEventArgs e) => TogglePopup(forceShow: true);
 
@@ -66,36 +94,15 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Opens a small choice menu for the "⤴ Resume" button — done in
-    /// code-behind (not command/XAML bindings like the other row buttons)
-    /// because a ContextMenu is its own popup root, not part of the normal
-    /// visual tree, which makes the ElementName-back-to-RootWindow pattern
-    /// used elsewhere in this row unreliable here.
+    /// Opens a small choice menu for the "⤴ Resume" button — see <see cref="ResumeMenuHelper"/>.
     /// </summary>
     private void ResumeButton_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is not Button button ||
-            button.DataContext is not SessionItemViewModel session ||
-            DataContext is not TrayViewModel viewModel)
+        if (sender is Button button &&
+            button.DataContext is SessionItemViewModel session &&
+            DataContext is TrayViewModel viewModel)
         {
-            return;
+            ResumeMenuHelper.Show(button, session, viewModel);
         }
-
-        var menu = new ContextMenu();
-
-        var historyItem = new MenuItem { Header = "Resume with history" };
-        historyItem.Click += (_, _) => viewModel.ResumeSessionCommand.Execute(session);
-        menu.Items.Add(historyItem);
-
-        var summaryItem = new MenuItem { Header = "Resume with summary" };
-        summaryItem.Click += (_, _) => viewModel.StartSessionFromSummaryCommand.Execute(session);
-        menu.Items.Add(summaryItem);
-
-        menu.Items.Add(new Separator());
-        menu.Items.Add(new MenuItem { Header = "Cancel" }); // no handler: selecting it just dismisses the menu.
-
-        button.ContextMenu = menu;
-        menu.PlacementTarget = button;
-        menu.IsOpen = true;
     }
 }

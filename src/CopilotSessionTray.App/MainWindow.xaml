@@ -37,7 +37,8 @@
                         Grid.Row="0"
                         ToolTipText="{Binding ToolTipText}"
                         MenuActivation="RightClick"
-                        TrayLeftMouseUp="TrayIcon_TrayLeftMouseUp">
+                        TrayLeftMouseUp="TrayIcon_TrayLeftMouseUp"
+                        TrayLeftMouseDoubleClick="TrayIcon_TrayLeftMouseDoubleClick">
             <tb:TaskbarIcon.IconSource>
                 <!--
                     FontSize/TextMargin are both bound (not literal): GeneratedIconSource always
@@ -61,6 +62,8 @@
                     <MenuItem Header="Copilot Session Tray (demo data)" IsEnabled="False" FontWeight="Bold" />
                     <Separator />
                     <MenuItem Header="Show sessions" Click="ShowSessions_Click" />
+                    <MenuItem Header="Start new task…" Command="{Binding StartYoloTaskCommand}" />
+                    <MenuItem Header="Session history…" Command="{Binding ShowSessionHistoryCommand}" />
                     <MenuItem Header="Mark all as read" Command="{Binding MarkAllReadCommand}" />
                     <MenuItem Header="Cycle demo data" Command="{Binding CycleDemoScenarioCommand}" />
                     <Separator />
@@ -79,7 +82,7 @@
                        FontSize="11"
                        Foreground="Gray"
                        TextWrapping="Wrap"
-                       Text="Phase 1 demo — static/fake data, not wired to real sessions yet" />
+                       Text="{Binding HeaderSubtitleText}" />
         </StackPanel>
 
         <ListBox Grid.Row="1"
@@ -164,8 +167,11 @@
         <TextBlock Grid.Row="1"
                    VerticalAlignment="Center"
                    HorizontalAlignment="Center"
+                   MaxWidth="280"
+                   TextWrapping="Wrap"
+                   TextAlignment="Center"
                    Foreground="Gray"
-                   Text="No sessions (demo)"
+                   Text="{Binding EmptyStateText}"
                    Visibility="{Binding EmptyStateVisibility}" />
 
         <StackPanel Grid.Row="2"

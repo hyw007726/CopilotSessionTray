@@ -11,8 +11,16 @@ namespace CopilotSessionTray.Core.Models;
 /// If non-empty, only sessions whose repository/cwd matches an entry here
 /// raise notifications. An empty list means "watch everything".
 /// </param>
+/// <param name="LastNewTaskWorkspaceDirectory">
+/// The workspace folder the user last picked in the "Start new task" panel,
+/// so it can be pre-filled next time. Not really a <em>notification</em>
+/// setting, but reusing this bag rather than adding a new
+/// <see cref="Contracts.IAppStateStore"/> method for a single small value —
+/// that would grow the Phase 0.5-reviewed interface surface unilaterally.
+/// </param>
 public sealed record NotificationPreferences(
     bool IsMuted,
     TimeOnly? QuietHoursStart,
     TimeOnly? QuietHoursEnd,
-    IReadOnlyList<string> WatchedRepositories);
+    IReadOnlyList<string> WatchedRepositories,
+    string? LastNewTaskWorkspaceDirectory = null);

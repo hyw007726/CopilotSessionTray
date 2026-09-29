@@ -1,6 +1,6 @@
 # Copilot Session Tray — Implementation Plan
 
-Status: **Phase 1 done — tray shell built with fake/static data; Phase 0.5 contracts still pending your review**
+Status: **Phase 1 done; Phase 2 started (4 of 7 Core interfaces now have real implementations — see §10) — Phase 0.5 contracts still pending your review**
 Scope: personal local-use desktop utility (Windows)
 
 > **⚠️ Privacy reminder (applies to every phase, not just today's demo data):**
@@ -249,7 +249,13 @@ without reading implementation code.
 ### Stretch / later
 6. Watch-list filter by repository/cwd (only notify for chosen projects).
 7. Searchable history view backed by `session-store.db` (`turns`,
-   `checkpoints`, `search_index` FTS table already present).
+   `checkpoints`, `search_index` FTS table already present). **Started**:
+   `SessionHistoryWindow` shows the 30 most recently updated real sessions
+   (via `ISessionHistoryStore.GetRecentSessionsAsync`), each resumable
+   through the same choice menu as the tray popup's rows (factored out into
+   a shared `ResumeMenuHelper` so the two don't duplicate that logic). Not
+   yet included: search/filter against `search_index`, pagination beyond
+   30, and drilling into a session's own `turns`/`checkpoints`.
 8. Quiet hours / do-not-disturb schedule.
 9. Auto-start with Windows (Startup shortcut or Run key) + single-instance
    guard (named `Mutex`).
@@ -333,7 +339,62 @@ CopilotSessionTray\
    detail snippet, elapsed time, and an unread marker. `CopilotSessionTray.Core`
    is untouched — still contracts/models only, per Phase 0.5.
 4. **Phase 2 — Data layer**: implement `Core` behind the reviewed interfaces
-   + xUnit tests reading the real sources via fixtures.
+   + xUnit tests reading the real sources via fixtures. **Started**: 4 of 7
+   interfaces now have real implementations under
+   `src\CopilotSessionTray.Core\Services\`:
+   - `OpenSessionsRegistryReader` (`IOpenSessionsRegistryReader`) — reads
+     the real `open-sessions-state.json`; format re-verified unchanged
+     against a live, currently-populated file while implementing this.
+   - `ProcessLivenessChecker` (`IProcessLivenessChecker`) — real
+     `Process.GetProcessById`/`GetProcessesByName("copilot")` checks.
+   - `SessionHistoryStore` (`ISessionHistoryStore`) — real, read-only
+     `Microsoft.Data.Sqlite` access to `session-store.db` (`Mode=ReadOnly`,
+     retry-with-backoff on `SQLITE_BUSY`/`SQLITE_LOCKED`); schema
+     re-verified against the real, populated DB. All 4 interface methods
+     implemented (not just the one needed for the scenario below).
+   - `AppStateStore` (`IAppStateStore`) — real, file-based (JSON under
+     `%LOCALAPPDATA%\CopilotSessionTray\app-state.json`) persistence for
+     read markers, preferences (including the "Start new task" panel's
+     remembered workspace directory — see Phase 5 below), and custom
+     display names; a `SemaphoreSlim` serializes read-modify-write calls
+     within the process. All 6 interface methods implemented.
+   - Plus one small **non-interface** helper,
+     `SessionLockFileInspector` — reads a session's
+     `session-state\<id>\inuse.<pid>.lock` to find its owning pid.
+     Deliberately *not* added as an 8th reviewed contract (it doesn't
+     cleanly fit any of the 7; this cross-referencing job really belongs to
+     `ISessionDetectionEngine` once that's implemented for real) — kept as
+     a small, clearly-labeled stand-in rather than unilaterally expanding
+     the Phase 0.5 contract surface.
+   - Wired into a new 6th "live" tray cycle-demo-data scenario
+     (`TrayViewModel.LoadLiveSessionsScenarioAsync`) as a real, working
+     proof. **Revised after initial user feedback** — the first version
+     only checked "is *any* copilot process running," which wasn't
+     enough: empirically, `open-sessions-state.json` entries can persist
+     for hours after a session is actually done with, and a single
+     long-lived `copilot` process can hold `inuse.<pid>.lock` files in
+     *multiple* old session folders at once (e.g. after `/resume`/`/fork`).
+     A session now only counts as genuinely open if its lock file's pid is
+     currently running (via `SessionLockFileInspector` +
+     `IProcessLivenessChecker` — directly implementing the §9 "stuck state
+     machine" mitigation) *and* it's the most-recently-refreshed session
+     for that pid (older ones sharing the same pid are superseded, not
+     open). Each surviving row's title comes from `ISessionHistoryStore`'s
+     `summary` column — confirmed to match what VS Code's own session list
+     shows for the same session id. **Extended further**: also appends up
+     to 10 of the most recently updated genuinely-closed sessions below the
+     open ones (same history query as `ShowSessionHistory`, minus anything
+     already shown as open — verified no duplicate ids), so this one view
+     answers both "what's open" and "what did I just finish" at a glance.
+     Deliberately **not yet implemented**:
+     `events.jsonl` tailing, `ISessionDetectionEngine`'s real stateful
+     diffing/polling loop (this scenario is a one-shot snapshot, not a
+     poll), `IAppStateStore` persistence, notifications.
+   - No xUnit tests/fixtures added yet for any of these three — they were
+     verified manually (scratch harnesses reading the real file/DB/processes
+     directly, and driving the real `TrayViewModel` through the new
+     scenario) rather than via checked-in fixture-based tests; still a
+     Phase 2 gap.
 5. **Phase 3 — Wire-up**: detection engine drives real tray icon state +
    popup session list.
 6. **Phase 4 — Notifications**: toast on completion, unread badge, mark-as-read.
