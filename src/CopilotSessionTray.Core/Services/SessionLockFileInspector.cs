@@ -15,22 +15,45 @@ namespace CopilotSessionTray.Core.Services;
 /// </summary>
 public sealed class SessionLockFileInspector
 {
-    private static readonly string SessionStateRoot = Path.Combine(
+    private static readonly string DefaultSessionStateRoot = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".copilot", "session-state");
+
+    private readonly string _sessionStateRoot;
+
+    /// <summary>
+    /// Creates an inspector against the real <c>session-state</c> folder. An explicit
+    /// <paramref name="sessionStateRoot"/> override exists solely so xUnit tests can point this at
+    /// a temp fixture folder instead of the real <c>.copilot</c> folder — every real call site
+    /// uses the parameterless default.
+    /// </summary>
+    public SessionLockFileInspector(string? sessionStateRoot = null)
+    {
+        _sessionStateRoot = sessionStateRoot ?? DefaultSessionStateRoot;
+    }
 
     /// <summary>
     /// Returns the process id embedded in this session's <c>inuse.&lt;pid&gt;.lock</c> file, or
     /// null if no such lock file currently exists (no live owning process on record for it).
+    ///
+    /// Normally there's at most one lock file per session folder, but if a crashed process ever
+    /// left a stale one behind before a new process created its own, more than one could
+    /// technically coexist — <see cref="Directory.EnumerateFiles(string, string)"/> makes no
+    /// ordering guarantee in that case, so picking the most recently written file (rather than
+    /// whatever happens to enumerate first) keeps this deterministic and consistent with the
+    /// same "freshest wins" rule <c>TrayViewModel.LoadLiveSessionsScenarioAsync</c> already
+    /// applies when one pid holds locks across multiple session folders.
     /// </summary>
     public int? GetOwningProcessId(string sessionId)
     {
-        var sessionDir = Path.Combine(SessionStateRoot, sessionId);
+        var sessionDir = Path.Combine(_sessionStateRoot, sessionId);
         if (!Directory.Exists(sessionDir))
         {
             return null;
         }
 
-        var lockFile = Directory.EnumerateFiles(sessionDir, "inuse.*.lock").FirstOrDefault();
+        var lockFile = Directory.EnumerateFiles(sessionDir, "inuse.*.lock")
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .FirstOrDefault();
         if (lockFile is null)
         {
             return null;

@@ -19,9 +19,10 @@ public partial class MainWindow : Window
     // right before the "start new task" window appears on top of it.
     private readonly DispatcherTimer _singleClickTimer;
 
-    public MainWindow()
+    public MainWindow(TrayViewModel viewModel)
     {
         InitializeComponent();
+        DataContext = viewModel;
         _singleClickTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
         _singleClickTimer.Tick += (_, _) =>
         {

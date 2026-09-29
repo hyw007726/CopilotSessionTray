@@ -18,21 +18,22 @@ namespace CopilotSessionTray.App.ViewModels;
 /// shell: icon, context menu, quit, run-at-startup toggle; fake/static data
 /// only").
 ///
-/// Nothing in this class reads real Copilot CLI state: <see cref="Sessions"/>
-/// is seeded from <see cref="LoadDemoScenario"/> with static fake rows, and
-/// <see cref="CycleDemoScenario"/> exists purely so the tray icon/popup's
-/// different visual states can be exercised on demand. That real wiring
-/// (polling <c>open-sessions-state.json</c>, tailing <c>events.jsonl</c>,
-/// etc.) lands in later phases behind <c>CopilotSessionTray.Core</c>'s
-/// already-reviewed contracts — see IMPLEMENTATION_PLAN.md §4.1.
+/// The "Cycle demo data" scenarios (0-4) still use static fake rows via
+/// <see cref="LoadDemoScenario"/>, purely so the tray icon/popup's
+/// different visual states can be exercised on demand — persistence
+/// (read/dismissed markers, custom display names) is deliberately never
+/// applied to that fake data, so cycling stays deterministic. Scenario 5
+/// (<see cref="LoadLiveSessionsScenarioAsync"/>) and the session history
+/// window are real, live data.
 ///
-/// The run-at-startup toggle, "open logs folder" action, and "resume in
-/// terminal" action are the exceptions: they're real, working logic, but
-/// purely OS/process integration (a Registry Run-key entry, opening a
-/// folder in Explorer, and launching a terminal) — none of them reads or
-/// interprets any real Copilot session data. "Mark read" and "remove" are
-/// real in-memory list mutations for this demo data, but don't yet persist
-/// anywhere — Phase 2 wires them to <c>IAppStateStore</c>.
+/// The run-at-startup toggle, "open logs folder" action, and per-session
+/// actions (resume/start-from-summary/mark read/remove/rename) are real,
+/// working logic: resume/start-from-summary/start-new-task go through
+/// <see cref="Core.Contracts.ISessionLauncher"/>/<see cref="Core.Contracts.IYoloTaskRunner"/>
+/// (retrofitted per IMPLEMENTATION_PLAN.md §9.1 — this class used to bypass
+/// them with private launch methods of its own), and mark-read/remove/rename
+/// persist via <see cref="Core.Contracts.IAppStateStore"/> for real (non-demo)
+/// sessions only.
 /// </summary>
 public sealed partial class TrayViewModel : ObservableObject
 {
@@ -40,21 +41,42 @@ public sealed partial class TrayViewModel : ObservableObject
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".copilot", "logs");
 
     // Real Core implementations (see Core\Services\), used only by the "live" cycle scenario
-    // (case 5) below — everything else in this class stays Phase 1 fake/static data. Constructed
-    // directly here rather than via DI, since no DI container exists yet in this Phase 1 skeleton.
-    private readonly IOpenSessionsRegistryReader _liveSessionsReader = new OpenSessionsRegistryReader();
-    private readonly IProcessLivenessChecker _liveProcessChecker = new ProcessLivenessChecker();
-    private readonly ISessionHistoryStore _liveHistoryStore = new SessionHistoryStore();
-    private readonly SessionLockFileInspector _liveLockFileInspector = new();
+    // (case 5) below — everything else in this class stays Phase 1 fake/static data. Injected via
+    // constructor (see App.xaml.cs's DI composition root) rather than constructed here directly —
+    // this used to be `= new OpenSessionsRegistryReader()` etc. field initializers before
+    // IMPLEMENTATION_PLAN.md §9.1's "no DI container" gap was addressed.
+    private readonly IOpenSessionsRegistryReader _liveSessionsReader;
+    private readonly IProcessLivenessChecker _liveProcessChecker;
+    private readonly ISessionHistoryStore _liveHistoryStore;
+    private readonly SessionLockFileInspector _liveLockFileInspector;
 
-    // Used for real, working persistence (remembering the "Start new task" workspace path) —
-    // not just the live-data preview scenario like the four fields above.
-    private readonly IAppStateStore _appStateStore = new AppStateStore();
+    // Real, working process-launch logic (resume/start-from-summary/start-new-task), and real,
+    // working persistence (read/dismissed markers, custom display names, remembered workspace
+    // path) — used for both the live-data scenario and the session history window, never for
+    // demo data (see the class doc comment above).
+    private readonly ISessionLauncher _sessionLauncher;
+    private readonly IYoloTaskRunner _yoloTaskRunner;
+    private readonly IAppStateStore _appStateStore;
 
     private int _demoScenarioIndex;
 
-    public TrayViewModel()
+    public TrayViewModel(
+        IOpenSessionsRegistryReader liveSessionsReader,
+        IProcessLivenessChecker liveProcessChecker,
+        ISessionHistoryStore liveHistoryStore,
+        SessionLockFileInspector liveLockFileInspector,
+        ISessionLauncher sessionLauncher,
+        IYoloTaskRunner yoloTaskRunner,
+        IAppStateStore appStateStore)
     {
+        _liveSessionsReader = liveSessionsReader;
+        _liveProcessChecker = liveProcessChecker;
+        _liveHistoryStore = liveHistoryStore;
+        _liveLockFileInspector = liveLockFileInspector;
+        _sessionLauncher = sessionLauncher;
+        _yoloTaskRunner = yoloTaskRunner;
+        _appStateStore = appStateStore;
+
         Sessions = new ObservableCollection<SessionItemViewModel>();
         LoadDemoScenario(0);
 
@@ -84,6 +106,7 @@ public sealed partial class TrayViewModel : ObservableObject
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HeaderSubtitleText))]
     [NotifyPropertyChangedFor(nameof(EmptyStateText))]
+    [NotifyPropertyChangedFor(nameof(TrayMenuHeaderText))]
     private bool _isShowingLiveData;
 
     /// <summary>Set only when the live scenario's real read fails, to surface why the list came back empty.</summary>
@@ -171,6 +194,16 @@ public sealed partial class TrayViewModel : ObservableObject
         ? "🟢 LIVE — read from your real %USERPROFILE%\\.copilot\\open-sessions-state.json"
         : "Phase 1 demo — static/fake data, not wired to real sessions yet";
 
+    /// <summary>
+    /// Bold header line shown at the top of the tray's right-click context menu. Was previously a
+    /// static XAML string hardcoded to "(demo data)" — stale/wrong as soon as <see cref="IsShowingLiveData"/>
+    /// scenario 5 was added, since it never updated to say so. Mirrors <see cref="HeaderSubtitleText"/>'s
+    /// live/demo distinction so the menu can't show information that contradicts the popup below it.
+    /// </summary>
+    public string TrayMenuHeaderText => IsShowingLiveData
+        ? "Copilot Session Tray (live)"
+        : "Copilot Session Tray (demo data)";
+
     /// <summary>Text shown in the popup when <see cref="Sessions"/> is empty — distinguishes "no fake demo rows for this scenario" from "your real registry has no open sessions right now" / a real read failure.</summary>
     public string EmptyStateText => IsShowingLiveData
         ? (_liveDataError ?? "No open sessions found in your real .copilot registry right now.")
@@ -203,7 +236,7 @@ public sealed partial class TrayViewModel : ObservableObject
     partial void OnRunAtStartupEnabledChanged(bool value) => StartupRegistration.SetEnabled(value);
 
     [RelayCommand]
-    private void MarkAllRead()
+    private async Task MarkAllRead()
     {
         foreach (var session in Sessions)
         {
@@ -211,11 +244,19 @@ public sealed partial class TrayViewModel : ObservableObject
         }
 
         RecomputeAggregateState();
+
+        if (IsShowingLiveData)
+        {
+            foreach (var session in Sessions)
+            {
+                await PersistReadMarkerAsync(session.Id, isDismissed: false);
+            }
+        }
     }
 
-    /// <summary>Marks a single session as read. Phase 2: persist via <c>IAppStateStore.SaveReadMarkerAsync</c>.</summary>
+    /// <summary>Marks a single session as read, persisting via <see cref="IAppStateStore"/> for real (non-demo) sessions.</summary>
     [RelayCommand]
-    private void MarkSessionRead(SessionItemViewModel? session)
+    private async Task MarkSessionRead(SessionItemViewModel? session)
     {
         if (session is null)
         {
@@ -224,17 +265,23 @@ public sealed partial class TrayViewModel : ObservableObject
 
         session.IsUnread = false;
         RecomputeAggregateState();
+
+        if (IsShowingLiveData)
+        {
+            await PersistReadMarkerAsync(session.Id, isDismissed: false);
+        }
     }
 
     /// <summary>
-    /// Removes a session from this app's visible list only — never touches
-    /// the underlying Copilot CLI session/files. Phase 2: persist the
-    /// dismissal via <c>IAppStateStore</c> (<see cref="Core.Models.SessionReadMarker.IsDismissed"/>)
-    /// so a real poll doesn't just bring it straight back. Confirms first,
-    /// defaulting to "No", so an accidental click/Enter doesn't remove it.
+    /// Removes a session from this app's visible list only — never touches the underlying
+    /// Copilot CLI session/files. For real (non-demo) sessions, persists the dismissal via
+    /// <see cref="IAppStateStore"/> (<see cref="Core.Models.SessionReadMarker.IsDismissed"/>) so
+    /// reloading the live scenario doesn't just bring it straight back; demo-data dismissals stay
+    /// in-memory only, so cycling stays deterministic. Confirms first, defaulting to "No", so an
+    /// accidental click/Enter doesn't remove it.
     /// </summary>
     [RelayCommand]
-    private void RemoveSession(SessionItemViewModel? session)
+    private async Task RemoveSession(SessionItemViewModel? session)
     {
         if (session is null)
         {
@@ -256,60 +303,83 @@ public sealed partial class TrayViewModel : ObservableObject
 
         Sessions.Remove(session);
         RecomputeAggregateState();
+
+        if (IsShowingLiveData)
+        {
+            await PersistReadMarkerAsync(session.Id, isDismissed: true);
+        }
     }
 
     /// <summary>
-    /// Opens a new split terminal pane and resumes the session there,
-    /// verbatim. Real OS process launch (like <see cref="OpenLogsFolder"/>),
-    /// matching the shape <c>ISessionLauncher.ResumeInTerminalAsync</c> will
-    /// use once Phase 2 implements it — but since this is fake demo data,
-    /// the id won't resolve to an actual Copilot session.
+    /// Loads any existing read marker for <paramref name="sessionId"/> and re-saves it with
+    /// <paramref name="isDismissed"/> applied, preserving whatever else was already recorded (so
+    /// dismissing a session doesn't erase its acknowledgement time, and marking one read doesn't
+    /// un-dismiss it). Only ever called for real sessions — see the class doc comment.
+    /// </summary>
+    private async Task PersistReadMarkerAsync(string sessionId, bool isDismissed)
+    {
+        var existing = await _appStateStore.GetReadMarkerAsync(sessionId);
+        var marker = existing is null
+            ? new SessionReadMarker(sessionId, LastAcknowledgedEventOffset: 0, DateTimeOffset.UtcNow, isDismissed)
+            : existing with { LastAcknowledgedUtc = DateTimeOffset.UtcNow, IsDismissed = isDismissed };
+        await _appStateStore.SaveReadMarkerAsync(marker);
+    }
+
+    /// <summary>
+    /// Opens a new split terminal pane and resumes the session there, verbatim, via
+    /// <see cref="ISessionLauncher.ResumeInTerminalAsync"/> — since this can also run against fake
+    /// demo data (cycle scenarios 0-4), a demo session's id won't resolve to an actual Copilot
+    /// session, but the process-launch attempt itself is real either way.
     /// </summary>
     [RelayCommand]
-    private void ResumeSession(SessionItemViewModel? session)
+    private async Task ResumeSession(SessionItemViewModel? session)
     {
         if (session is null)
         {
             return;
         }
 
-        LaunchCopilotInTerminal($"--resume={session.Id}", session.WorkingDirectory, session.Id);
+        await TryLaunchAsync(
+            () => _sessionLauncher.ResumeInTerminalAsync(session.Id, session.WorkingDirectory), session.Id);
     }
 
     /// <summary>
-    /// Opens a new terminal tab/pane and starts a brand new Copilot CLI
-    /// session there, seeded only with <see cref="SessionItemViewModel.Summary"/>
-    /// — not this session's full history. Matches the shape
-    /// <c>ISessionLauncher.StartNewSessionFromSummaryAsync</c> will use once
-    /// Phase 2 implements it.
+    /// Opens a new terminal tab/pane and starts a brand new Copilot CLI session there, via
+    /// <see cref="ISessionLauncher.StartNewSessionFromSummaryAsync"/>, seeded only with
+    /// <see cref="SessionItemViewModel.Summary"/> — not this session's full history.
     /// </summary>
     [RelayCommand]
-    private void StartSessionFromSummary(SessionItemViewModel? session)
+    private async Task StartSessionFromSummary(SessionItemViewModel? session)
     {
         if (session is null)
         {
             return;
         }
 
-        var sanitized = SanitizeForCmdExe(session.Summary);
-        LaunchCopilotInTerminal($"-i \"{sanitized}\"", session.WorkingDirectory, session.Id);
+        await TryLaunchAsync(
+            () => _sessionLauncher.StartNewSessionFromSummaryAsync(session.Summary, session.WorkingDirectory), session.Id);
     }
 
     /// <summary>
-    /// Opens the summary panel for a session — shows its AI-written summary
-    /// and lets the user set a local display-name override for it. Phase 2:
-    /// persist the rename via the now-extended <c>IAppStateStore</c>
-    /// (<see cref="Core.Contracts.IAppStateStore.SetCustomDisplayNameAsync"/>).
+    /// Opens the summary panel for a session — shows its AI-written summary and lets the user set
+    /// a local display-name override for it. For real (non-demo) sessions, persists a changed name
+    /// via <see cref="IAppStateStore.SetCustomDisplayNameAsync"/> once the dialog closes.
     /// </summary>
     [RelayCommand]
-    private void ShowSessionSummary(SessionItemViewModel? session)
+    private async Task ShowSessionSummary(SessionItemViewModel? session)
     {
         if (session is null)
         {
             return;
         }
 
+        var originalDisplayName = session.DisplayName;
         new SessionSummaryWindow(session) { Owner = TryGetOwnerWindow() }.ShowDialog();
+
+        if (IsShowingLiveData && session.DisplayName != originalDisplayName)
+        {
+            await _appStateStore.SetCustomDisplayNameAsync(session.Id, session.DisplayName);
+        }
     }
 
     /// <summary>
@@ -340,16 +410,19 @@ public sealed partial class TrayViewModel : ObservableObject
         }
 
         var now = DateTimeOffset.UtcNow;
-        var items = recentSessions.Select(summary => BuildClosedSessionItem(summary, now)).ToList();
+        var items = new List<SessionItemViewModel>(recentSessions.Count);
+        foreach (var summary in recentSessions)
+        {
+            items.Add(await BuildClosedSessionItemAsync(summary, now));
+        }
 
         new SessionHistoryWindow(items, this) { Owner = TryGetOwnerWindow() }.ShowDialog();
     }
 
     /// <summary>
     /// Opens the "new task" panel (prompt + workspace picker, pre-filled from the last-used
-    /// workspace via <see cref="IAppStateStore"/>), matching the shape
-    /// <c>IYoloTaskRunner.StartInteractiveAsync</c> will use once Phase 2 implements it — see
-    /// IMPLEMENTATION_PLAN.md. Real OS process launch on "Start", like <see cref="ResumeSession"/>.
+    /// workspace via <see cref="IAppStateStore"/>), then starts it via
+    /// <see cref="IYoloTaskRunner.StartInteractiveAsync"/> on "Start".
     /// </summary>
     [RelayCommand]
     private async Task StartYoloTask()
@@ -365,119 +438,36 @@ public sealed partial class TrayViewModel : ObservableObject
         var preferences = await _appStateStore.GetPreferencesAsync();
         await _appStateStore.SavePreferencesAsync(preferences with { LastNewTaskWorkspaceDirectory = window.WorkspaceDirectory });
 
-        var sanitized = SanitizeForCmdExe(window.Prompt);
-        LaunchCopilotInTerminal($"-i \"{sanitized}\"", window.WorkspaceDirectory, "new task", window.EnableAllPermissions);
+        await TryLaunchAsync(
+            () => _yoloTaskRunner.StartInteractiveAsync(window.Prompt, window.WorkspaceDirectory, window.EnableAllPermissions),
+            "new task");
     }
 
     /// <summary>
-    /// Launches <c>copilot</c> with the given arguments in a new Windows Terminal tab/pane.
-    ///
-    /// Three things here were fixed after being caught by real usage, not just code review — all
-    /// verified empirically with a throwaway fake <c>copilot.cmd</c> stand-in that echoed back
-    /// exactly what it received, so the whole pipeline could be checked without ever invoking a
-    /// real (and non-free) agent run:
-    /// <list type="bullet">
-    /// <item>
-    /// <b>An extra blank pane appeared.</b> The previous version used
-    /// <c>wt.exe split-pane ...</c>, which — confirmed by inspecting the actual child processes
-    /// wt.exe spawned — creates a brand-new window with its own default-profile pane <em>first</em>
-    /// whenever no Windows Terminal window is already open, then splits the requested pane in
-    /// next to it; <c>-w 0</c> does not prevent this in that cold-start case. Switched to the
-    /// plain <c>wt.exe -d &lt;dir&gt; cmd /k &lt;path&gt;</c> form (no <c>split-pane</c> at all),
-    /// verified to produce exactly one pane whether or not a window was already open.
-    /// </item>
-    /// <item>
-    /// <b><c>copilot</c> failed with "unrecognized subcommand".</b> A bare positional prompt
-    /// (e.g. <c>copilot "some prompt"</c>) is not a supported way to seed a session — confirmed
-    /// directly from <c>copilot --help</c>: prompts need an explicit <c>-i/--interactive</c>
-    /// (open an interactive session with this as the first message) or <c>-p/--prompt</c>
-    /// (run once, non-interactively, then exit) flag; callers of this method now include
-    /// whichever is appropriate in <paramref name="copilotArguments"/>. Separately, threading
-    /// the whole command through <c>cmd /k "copilot ... \"prompt\""</c> as one embedded string
-    /// also produced genuinely broken nested quoting once inspected via the real child process's
-    /// command line (confirmed via <c>Win32_Process</c>) — fixed by writing the full command to a
-    /// small temp <c>.cmd</c> script and having <c>cmd /k</c> just run that file by path, so only
-    /// a single, simple path (not an arbitrary prompt) ever has to survive wt.exe's own
-    /// command-line relay.
-    /// </item>
-    /// <item>
-    /// <b>Still prompted for folder trust despite "enable all permissions".</b> Confirmed via
-    /// <c>copilot help environment</c>: the <c>--allow-all</c>/<c>--yolo</c> command-line flags
-    /// and the <c>COPILOT_ALLOW_ALL</c> environment variable are <em>not</em> equivalent — only
-    /// setting the environment variable to exactly <c>"true"</c> <em>also</em> trusts the working
-    /// directory without prompting; the command-line flags (and any other truthy spelling of the
-    /// env var) only auto-approve individual tool/path/url actions, a separate, narrower gate.
-    /// Switched <paramref name="enableAllPermissions"/> to set the environment variable (via a
-    /// <c>set</c> line in the generated script, applying to the <c>copilot</c> child process
-    /// specifically rather than relying on <see cref="ProcessStartInfo.EnvironmentVariables"/>
-    /// with <c>UseShellExecute=true</c>, which doesn't reliably support per-launch overrides)
-    /// instead of appending the command-line flag.
-    /// </item>
-    /// </list>
+    /// Runs a real process-launch action from <see cref="ISessionLauncher"/>/<see cref="IYoloTaskRunner"/>
+    /// (both retrofitted per IMPLEMENTATION_PLAN.md §9.1 — this used to be a private
+    /// <c>LaunchCopilotInTerminal</c> method here with its own try/catch; the launch logic itself
+    /// now lives in <c>Core.Services.CopilotTerminalLauncher</c>, shared by both interfaces),
+    /// showing the same error dialog on failure as before if Windows Terminal can't be started.
     /// </summary>
-    /// <param name="copilotArguments">
-    /// Arguments to pass to <c>copilot</c>, already safely quoted/escaped for a batch-file line
-    /// if they came from arbitrary text (see <see cref="SanitizeForCmdExe"/>) — this method does
-    /// not escape them itself, since a plain session id needs no escaping at all.
-    /// </param>
-    /// <param name="context">A short label identifying what's being launched, used only in the error message if launching fails.</param>
-    /// <param name="enableAllPermissions">
-    /// When true, sets <c>COPILOT_ALLOW_ALL=true</c> for the launched <c>copilot</c> process —
-    /// auto-approves tool/path/url actions <em>and</em> trusts the working directory without
-    /// prompting (see the "Still prompted for folder trust" remark above).
-    /// </param>
-    private static void LaunchCopilotInTerminal(
-        string copilotArguments, string? workingDirectory, string context, bool enableAllPermissions = false)
+    /// <param name="launch">The launch action to run.</param>
+    /// <param name="context">A short label identifying what was being launched, used only in the error message.</param>
+    private static async Task TryLaunchAsync(Func<Task> launch, string context)
     {
-        var resolvedWorkingDirectory = workingDirectory
-            ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-
         try
         {
-            // Left in %TEMP% rather than deleted right after launch: cmd /k keeps running (and
-            // could still need to re-read the file) for as long as the pane stays open, which has
-            // no fixed end time — a stray handful of tiny leftover .cmd files is an acceptable
-            // trade-off for a personal tool versus the complexity of tracking pane lifetime.
-            var scriptPath = Path.Combine(Path.GetTempPath(), $"copilot-launch-{Guid.NewGuid():N}.cmd");
-            var envSetupLine = enableAllPermissions ? $"set COPILOT_ALLOW_ALL=true{Environment.NewLine}" : string.Empty;
-            File.WriteAllText(scriptPath, $"@echo off{Environment.NewLine}{envSetupLine}copilot {copilotArguments}{Environment.NewLine}");
-
-            var startInfo = new ProcessStartInfo("wt.exe") { UseShellExecute = true };
-            // ArgumentList (not a single interpolated Arguments string) is used here so embedded
-            // spaces in the working directory or script path can't be misread as extra
-            // wt.exe-level arguments — each item becomes exactly one properly-quoted Win32
-            // argument regardless of its contents.
-            startInfo.ArgumentList.Add("-d");
-            startInfo.ArgumentList.Add(resolvedWorkingDirectory);
-            startInfo.ArgumentList.Add("cmd");
-            startInfo.ArgumentList.Add("/k");
-            startInfo.ArgumentList.Add(scriptPath);
-
-            Process.Start(startInfo);
+            await launch();
         }
         catch (System.ComponentModel.Win32Exception)
         {
             MessageBox.Show(
                 $"Couldn't launch Windows Terminal for '{context}'.{Environment.NewLine}{Environment.NewLine}" +
-                "(Demo build — this is a real process launch; a fake demo session id won't resolve to an actual Copilot session.)",
+                "Make sure Windows Terminal (wt.exe) is installed.",
                 "Copilot Session Tray",
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
         }
     }
-
-    /// <summary>
-    /// Makes arbitrary text safe to embed inside a single quoted argument on a generated
-    /// batch-file command line (see <see cref="LaunchCopilotInTerminal"/>). cmd.exe has no fully
-    /// reliable, universal escape for embedded double-quotes or <c>%</c> (variable expansion) in
-    /// that position, so rather than fight its notoriously inconsistent quoting, this replaces
-    /// the characters that would otherwise break or alter the command with safe look-alikes.
-    /// Adequate for a demo/summary string; a real Phase 2 implementation feeding arbitrary
-    /// checkpoint text should instead use something injection-proof like PowerShell's base64
-    /// <c>-EncodedCommand</c>.
-    /// </summary>
-    private static string SanitizeForCmdExe(string text) =>
-        text.Replace('"', '\'').Replace('%', '_').Replace('\r', ' ').Replace('\n', ' ');
 
     /// <summary>
     /// Returns <see cref="Application.MainWindow"/> if it's safe to use as a dialog's
@@ -605,6 +595,12 @@ public sealed partial class TrayViewModel : ObservableObject
         var now = DateTimeOffset.UtcNow;
         foreach (var entry in genuinelyOpen)
         {
+            var marker = await _appStateStore.GetReadMarkerAsync(entry.SessionId);
+            if (marker?.IsDismissed == true)
+            {
+                continue; // user removed this one; don't let a reload bring it straight back.
+            }
+
             var status = entry.Working ? SessionStatus.Working : SessionStatus.WaitingForInput;
 
             SessionSummary? summary = null;
@@ -619,7 +615,8 @@ public sealed partial class TrayViewModel : ObservableObject
             }
 
             var shortId = entry.SessionId.Length > 8 ? entry.SessionId[..8] : entry.SessionId;
-            var displayName = summary?.Summary ?? summary?.Repository ?? summary?.Cwd ?? $"Session {shortId}…";
+            var computedName = summary?.Summary ?? summary?.Repository ?? summary?.Cwd ?? $"Session {shortId}…";
+            var displayName = await ApplyCustomDisplayNameOverrideAsync(entry.SessionId, computedName);
             var detail = summary?.Cwd is { Length: > 0 } cwd
                 ? $"{cwd} · opened {FormatAge(now - entry.OpenedAtUtc)} ago"
                 : $"Opened {FormatAge(now - entry.OpenedAtUtc)} ago.";
@@ -641,9 +638,22 @@ public sealed partial class TrayViewModel : ObservableObject
         try
         {
             var recentSessions = await _liveHistoryStore.GetRecentSessionsAsync(maxCount: 30 + openIds.Count);
-            foreach (var summary in recentSessions.Where(s => !openIds.Contains(s.Id)).Take(10))
+            var closedCount = 0;
+            foreach (var summary in recentSessions.Where(s => !openIds.Contains(s.Id)))
             {
-                Sessions.Add(BuildClosedSessionItem(summary, now));
+                if (closedCount >= 10)
+                {
+                    break;
+                }
+
+                var marker = await _appStateStore.GetReadMarkerAsync(summary.Id);
+                if (marker?.IsDismissed == true)
+                {
+                    continue; // removed; don't let it re-fill the 10-slot quota after a reload.
+                }
+
+                Sessions.Add(await BuildClosedSessionItemAsync(summary, now));
+                closedCount++;
             }
         }
         catch
@@ -661,16 +671,28 @@ public sealed partial class TrayViewModel : ObservableObject
     /// data alone (no live registry entry) — shared by <see cref="ShowSessionHistory"/> and the
     /// "recent closed sessions" appended below the open ones in
     /// <see cref="LoadLiveSessionsScenarioAsync"/>, so both use identical fallback/formatting
-    /// logic rather than two copies that could quietly drift apart.
+    /// logic rather than two copies that could quietly drift apart. Applies any persisted custom
+    /// display name (see <see cref="ApplyCustomDisplayNameOverrideAsync"/>) — deliberately not
+    /// dismissal-filtered here, unlike the live scenario's closed-sessions block above: the
+    /// history window is meant to still show everything, even sessions "removed" from the
+    /// quick-glance popup.
     /// </summary>
-    private static SessionItemViewModel BuildClosedSessionItem(SessionSummary summary, DateTimeOffset now)
+    private async Task<SessionItemViewModel> BuildClosedSessionItemAsync(SessionSummary summary, DateTimeOffset now)
     {
         var shortId = summary.Id.Length > 8 ? summary.Id[..8] : summary.Id;
-        var displayName = summary.Summary ?? summary.Repository ?? summary.Cwd ?? $"Session {shortId}…";
+        var computedName = summary.Summary ?? summary.Repository ?? summary.Cwd ?? $"Session {shortId}…";
+        var displayName = await ApplyCustomDisplayNameOverrideAsync(summary.Id, computedName);
         var detail = summary.Cwd ?? summary.Repository ?? "(unknown workspace)";
         return new SessionItemViewModel(
             summary.Id, displayName, SessionStatus.Closed, detail, now - summary.UpdatedAtUtc,
             isUnread: false, workingDirectory: summary.Cwd);
+    }
+
+    /// <summary>Returns the user's persisted local rename for a session, if any, otherwise <paramref name="fallbackDisplayName"/>.</summary>
+    private async Task<string> ApplyCustomDisplayNameOverrideAsync(string sessionId, string fallbackDisplayName)
+    {
+        var customName = await _appStateStore.GetCustomDisplayNameAsync(sessionId);
+        return string.IsNullOrEmpty(customName) ? fallbackDisplayName : customName;
     }
 
     private static string FormatAge(TimeSpan age) => age switch

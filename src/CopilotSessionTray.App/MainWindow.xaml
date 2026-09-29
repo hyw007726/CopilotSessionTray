@@ -15,9 +15,12 @@
         ResizeMode="NoResize"
         Visibility="Hidden"
         Deactivated="Window_Deactivated">
-    <Window.DataContext>
-        <vm:TrayViewModel />
-    </Window.DataContext>
+    <!--
+        DataContext is no longer constructed here: TrayViewModel now takes its Core service
+        dependencies via constructor injection (see App.xaml.cs's DI composition root), so XAML
+        can no longer new() it up directly (no parameterless constructor) — code-behind sets
+        DataContext instead, from the instance the container resolved and passed in.
+    -->
 
 
     <Grid>
@@ -59,7 +62,7 @@
             </tb:TaskbarIcon.IconSource>
             <tb:TaskbarIcon.ContextMenu>
                 <ContextMenu>
-                    <MenuItem Header="Copilot Session Tray (demo data)" IsEnabled="False" FontWeight="Bold" />
+                    <MenuItem Header="{Binding TrayMenuHeaderText}" IsEnabled="False" FontWeight="Bold" />
                     <Separator />
                     <MenuItem Header="Show sessions" Click="ShowSessions_Click" />
                     <MenuItem Header="Start new task…" Command="{Binding StartYoloTaskCommand}" />

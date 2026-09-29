@@ -1,6 +1,6 @@
 # Copilot Session Tray — Implementation Plan
 
-Status: **Phase 1 done; Phase 2 started (4 of 7 Core interfaces now have real implementations — see §10) — Phase 0.5 contracts still pending your review**
+Status: **Phase 1 done; Phase 2 substantially complete — all 9 Core interfaces now have real implementations (see §10), 41 xUnit tests passing, real persistence wired end-to-end. Phase 0.5 contracts still pending your review. See §9.1 for the 2026-09-29 design-review pass and how each finding was resolved.**
 Scope: personal local-use desktop utility (Windows)
 
 > **⚠️ Privacy reminder (applies to every phase, not just today's demo data):**
@@ -220,6 +220,8 @@ Proposed `Core` contracts:
 | `IAppStateStore` | Persist/retrieve our own state: last-seen markers per session, mute/watch-list/quiet-hours preferences — separate from `.copilot`. |
 | `ISessionDetectionEngine` | The "brain": consumes the readers above, diffs successive polls, and emits state-change events (`SessionStarted`, `SessionWorkingChanged`, `SessionFinished`, `SessionClosed`). Most important contract to review closely since it defines the whole detection model. |
 | `INotificationService` | Dispatch a toast/notification for a finished session; fakeable in tests, swappable if the notification mechanism changes later. |
+| `ISessionLauncher` *(added post-Phase 0.5)* | Resume a session, or start a new one seeded from a summary, in an external terminal. **Implemented** (`Services.SessionLauncher`) and called through by `TrayViewModel` — see §9.1/§10 Phase 2. |
+| `IYoloTaskRunner` *(added post-Phase 0.5)* | Run an unattended "start new task" request (prompt + workspace + permission level) and report back a `YoloTaskResult`. **Implemented** (`Services.YoloTaskRunner`), including the previously-unused `RunHeadlessAsync` — see §9.1/§10 Phase 2. |
 
 Deliberately **not** interfaced: data models (`SessionInfo`, `SessionEvent`,
 `SessionStatus`, etc.) stay as plain records — interfaces are only added
@@ -242,7 +244,9 @@ without reading implementation code.
    `Working → WaitingForInput` (or a `session.task_complete` event appears),
    with a short summary (last assistant message / checkpoint title).
 4. Unread badge count on the tray icon; opening/dismissing a session in the
-   popup marks it read.
+   popup marks it read. **Done for real sessions**: `MarkSessionRead`/
+   `MarkAllRead`/`RemoveSession` persist via `IAppStateStore` (demo scenarios
+   deliberately stay in-memory-only, so cycling stays deterministic) — see §9.1.
 5. Context menu: mute/unmute notifications, open `.copilot` logs folder,
    quit.
 
@@ -262,6 +266,20 @@ without reading implementation code.
 10. Toast action buttons: "copy `copilot --resume <id>` command", "open
     working directory in Explorer/VS Code".
 11. Optional token-usage/cost mini-dashboard from `assistant_usage_events`.
+12. **Start a new Copilot task from the tray** — not originally listed here,
+    but built during Phase 2: `NewTaskWindow` (prompt, workspace picker that
+    remembers the last-used directory via `IAppStateStore`, an "enable all
+    permissions" checkbox that sets `COPILOT_ALLOW_ALL=true` for the
+    launched process), reachable via tray double-click or the context menu's
+    "Start new task…". Real, working process launch through `IYoloTaskRunner`
+    (see §9.1).
+13. **Per-session quick actions** — also built during Phase 2, also not
+    originally listed here: "⤴ Resume" (choice of resume-with-history or
+    resume-with-summary, both launching a real terminal via `ISessionLauncher`),
+    "🗒 Summary" (view the AI-written summary, set a local rename — persisted
+    via `IAppStateStore` for real sessions, see item 4 above), "✕ Remove"
+    (confirm-first, view-only dismissal, also persisted). Shared between
+    the tray popup and `SessionHistoryWindow` via `ResumeMenuHelper`.
 
 ## 6. Notification content sketch
 
@@ -310,6 +328,87 @@ CopilotSessionTray\
 | App itself accidentally corrupts or writes into `.copilot\*` | Hard rule: `Core` file/DB access is read-only; all app state lives under `%LOCALAPPDATA%\CopilotSessionTray\`. |
 | Official GitHub taskbar-presence feature ships later and overlaps this app | Keep this app fully independent/uninstallable; revisit once that feature is enabled by default. |
 
+### 9.1 Design-review findings (2026-09-29) — resolved, plus what's still deferred
+
+A full pass over the shipped code (not just this plan) surfaced gaps that
+existed in practice but were never written down anywhere. First recorded
+here as open questions, then acted on the same day per "decide, don't ask"
+— resolutions below; two real bugs found in the same original pass (a
+hardcoded-stale tray menu label, and a non-deterministic lock-file pick in
+`SessionLockFileInspector`) were fixed separately and aren't repeated here.
+
+- **`ISessionLauncher`/`IYoloTaskRunner` were unused — resolved: retrofitted.**
+  `Core.Services.SessionLauncher`/`YoloTaskRunner` are now real
+  implementations; `TrayViewModel` calls through them instead of its old
+  private `LaunchCopilotInTerminal` methods (removed). Both share a new
+  internal `CopilotTerminalLauncher` helper for the actual `wt.exe`/script
+  logic. `IYoloTaskRunner.StartInteractiveAsync` gained an additive
+  `allowAllPermissions` parameter (default `true`) so it can express what
+  the real "start new task" checkbox already did. `RunHeadlessAsync` is
+  genuinely new (no prior code path): runs `copilot -p ... --allow-all
+  --no-ask-user --output-format json` unattended and returns captured
+  output — for later use investigating whether a long-running session
+  looks genuinely stuck (§9's risk). Routed through `cmd.exe /c` rather
+  than starting `copilot` directly: found empirically that
+  `UseShellExecute=false` (required to redirect stdout) only assumes a
+  `.exe` extension and won't resolve an npm-style `.cmd` shim the way a
+  shell does.
+- **Read-marker/rename persistence was built but not wired up — resolved:
+  wired.** `MarkSessionRead`/`MarkAllRead`/`RemoveSession` now call
+  `IAppStateStore.SaveReadMarkerAsync`; the summary panel's rename now
+  calls `SetCustomDisplayNameAsync`. Gated on `IsShowingLiveData` so demo
+  scenarios (fixed ids like `demo-1`) never persist and stay deterministic
+  across cycles — only real (live/closed) sessions do. Dismissed sessions
+  are now excluded when reloading the live scenario; custom names are
+  re-applied on every load (both the live scenario and the history window).
+  Verified end to end against real data (including cleanup) before landing.
+  Assumption made and worth reconfirming: dismissal only hides a session
+  from the live popup, not from the history window, which intentionally
+  still shows everything.
+- **Zero automated tests — resolved: 41 xUnit tests added.** Required
+  making the file/db/registry paths in all Core services constructor-
+  injectable (optional parameter, defaulting to the real path — every real
+  call site unaffected) so tests use temp fixtures, never this developer's
+  real `.copilot` folder. Covers `AppStateStore`, `OpenSessionsRegistryReader`,
+  `SessionHistoryStore` (against a real-schema temp SQLite db),
+  `SessionLockFileInspector` (including a regression test for the
+  freshest-lock-file bug fix), and `CopilotTerminalLauncher`'s pure
+  script-building/sanitization logic. Not yet covered: `ProcessLivenessChecker`,
+  `SessionLauncher`/`YoloTaskRunner`'s actual process-launch paths (real OS
+  process interaction — would need a process-starting abstraction to fake
+  cleanly; deferred, same reasoning as `ProcessLivenessChecker` originally),
+  and anything in the `App` project (ViewModels/windows).
+- **`TrayViewModel` size — attempted, effectively a wash, still deferred.**
+  Retrofitting `ISessionLauncher`/`IYoloTaskRunner` removed the ~90-line
+  `LaunchCopilotInTerminal`/`SanitizeForCmdExe` methods, but the new
+  persistence-wiring logic (marker/override helpers, dismissal filtering)
+  added roughly the same amount back — net change negligible (777 → 771
+  lines). Splitting it up remains a real, undecided question, better
+  revisited once `ISessionDetectionEngine` work forces a bigger restructure
+  anyway rather than done twice.
+- **No DI container — resolved: `Microsoft.Extensions.DependencyInjection`
+  added.** `TrayViewModel` now takes all 7 dependencies via constructor
+  injection instead of field-initializer `new()` calls; `App.xaml.cs` is
+  the composition root (`ConfigureServices`, all singletons — same
+  one-instance-for-the-app's-lifetime behavior as before, just built in one
+  place). `MainWindow` is also DI-resolved (also took a constructor
+  parameter for `TrayViewModel`, since XAML can no longer `new()` it up
+  without a parameterless constructor). Verified: DI-resolved
+  `TrayViewModel`/`MainWindow` share the same singleton instance and
+  correctly wired `DataContext`; demo and live scenarios (exercising all 7
+  injected dependencies, including the persistence wiring from above) both
+  still work identically; real compiled exe still starts/stops cleanly;
+  all 41 existing tests unaffected (Core itself wasn't touched). This also
+  now means `TrayViewModel` itself could be unit-tested with fake
+  dependencies (constructor injection makes that a real seam for the first
+  time) — not done yet, still a gap, but no longer a structural blocker.
+- Two narrower, lower-priority notes, still just notes: a logical
+  (non-crashing) race is possible if an async session-loading command and a
+  synchronous one interleave mid-`await` on the UI thread; and
+  `AppStateStore`'s in-process `SemaphoreSlim` doesn't protect
+  `app-state.json` against two *process* instances writing at once,
+  relevant only once §5 item 9's single-instance guard is being designed.
+
 ## 10. Milestones
 
 1. **Phase 0 — Spike**: throwaway console app that polls
@@ -339,9 +438,10 @@ CopilotSessionTray\
    detail snippet, elapsed time, and an unread marker. `CopilotSessionTray.Core`
    is untouched — still contracts/models only, per Phase 0.5.
 4. **Phase 2 — Data layer**: implement `Core` behind the reviewed interfaces
-   + xUnit tests reading the real sources via fixtures. **Started**: 4 of 7
-   interfaces now have real implementations under
-   `src\CopilotSessionTray.Core\Services\`:
+   + xUnit tests reading the real sources via fixtures. **Substantially
+   complete**: all 9 interfaces (the original 7, plus `ISessionLauncher`/
+   `IYoloTaskRunner` added along the way) now have real implementations
+   under `src\CopilotSessionTray.Core\Services\`:
    - `OpenSessionsRegistryReader` (`IOpenSessionsRegistryReader`) — reads
      the real `open-sessions-state.json`; format re-verified unchanged
      against a live, currently-populated file while implementing this.
@@ -389,12 +489,36 @@ CopilotSessionTray\
      Deliberately **not yet implemented**:
      `events.jsonl` tailing, `ISessionDetectionEngine`'s real stateful
      diffing/polling loop (this scenario is a one-shot snapshot, not a
-     poll), `IAppStateStore` persistence, notifications.
-   - No xUnit tests/fixtures added yet for any of these three — they were
-     verified manually (scratch harnesses reading the real file/DB/processes
-     directly, and driving the real `TrayViewModel` through the new
-     scenario) rather than via checked-in fixture-based tests; still a
-     Phase 2 gap.
+     poll), notifications.
+   - **2026-09-29: `IAppStateStore` persistence wired up, and 41 xUnit
+     tests added** (§9.1) — `Core.Tests` was empty until this pass. All 4
+     original services plus the two new ones below got a constructor-
+     injectable path override (default unchanged) specifically so tests use
+     temp fixtures, never the real `.copilot` folder or `%LOCALAPPDATA%`.
+   - **Also shipped in Phase 2, not covered above**: the "Start new task"
+     panel (`NewTaskWindow` + `IYoloTaskRunner`/`YoloTaskResult` model — see
+     §5 item 12), the session summary/rename panel (`SessionSummaryWindow`),
+     per-session Resume/Remove actions (§5 item 13) and the shared
+     `ResumeMenuHelper`, and tray double-click opening the "start new task"
+     panel directly. Notable fixes made along the way, all verified against
+     real data/processes rather than assumed: `wt.exe split-pane` was
+     dropped in favor of plain `wt.exe -d <dir> cmd /k <script>` (the former
+     always spawned an extra blank pane on a cold start); permissions are
+     granted via `COPILOT_ALLOW_ALL=true` in the generated launch script,
+     not the `--allow-all` CLI flag (confirmed via `copilot help
+     environment` that only the env var also bypasses the folder-trust
+     prompt); a `Window.Owner`-before-`Show()` crash (root cause: `MainWindow`
+     is deliberately never shown at startup) was fixed with a
+     `TryGetOwnerWindow()` guard plus a `DispatcherUnhandledException`
+     safety net in `App.xaml.cs`; a tray-icon double-click was found to also
+     fire two `TrayLeftMouseUp` events, needing a 250ms debounce timer.
+   - **2026-09-29 bug fixes** (see §9.1): the tray context menu's bold
+     header was hardcoded to "(demo data)" and never reflected the live
+     scenario — now bound to a real `TrayMenuHeaderText` property; and
+     `SessionLockFileInspector.GetOwningProcessId` picked an arbitrary lock
+     file via `FirstOrDefault()` instead of the most-recently-written one,
+     a latent correctness risk for the live-session detection path if a
+     session folder ever held more than one lock file.
 5. **Phase 3 — Wire-up**: detection engine drives real tray icon state +
    popup session list.
 6. **Phase 4 — Notifications**: toast on completion, unread badge, mark-as-read.

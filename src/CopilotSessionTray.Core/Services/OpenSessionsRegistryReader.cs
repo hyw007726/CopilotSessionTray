@@ -13,14 +13,27 @@ namespace CopilotSessionTray.Core.Services;
 /// </summary>
 public sealed class OpenSessionsRegistryReader : IOpenSessionsRegistryReader
 {
-    private static readonly string RegistryFilePath = Path.Combine(
+    private static readonly string DefaultRegistryFilePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".copilot", "open-sessions-state.json");
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
+    private readonly string _registryFilePath;
+
+    /// <summary>
+    /// Creates a reader against the real <c>open-sessions-state.json</c>. An explicit
+    /// <paramref name="registryFilePath"/> override exists solely so xUnit tests can point this at
+    /// a temp fixture file instead of the real <c>.copilot</c> folder — every real call site uses
+    /// the parameterless default.
+    /// </summary>
+    public OpenSessionsRegistryReader(string? registryFilePath = null)
+    {
+        _registryFilePath = registryFilePath ?? DefaultRegistryFilePath;
+    }
+
     public async Task<IReadOnlyDictionary<string, OpenSessionEntry>> ReadAsync(CancellationToken cancellationToken = default)
     {
-        if (!File.Exists(RegistryFilePath))
+        if (!File.Exists(_registryFilePath))
         {
             return new Dictionary<string, OpenSessionEntry>();
         }
@@ -33,7 +46,7 @@ public sealed class OpenSessionsRegistryReader : IOpenSessionsRegistryReader
         {
             try
             {
-                await using var stream = File.Open(RegistryFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                await using var stream = File.Open(_registryFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
                 var raw = await JsonSerializer.DeserializeAsync<Dictionary<string, RawEntry>>(stream, JsonOptions, cancellationToken)
                     .ConfigureAwait(false);
 
@@ -49,7 +62,7 @@ public sealed class OpenSessionsRegistryReader : IOpenSessionsRegistryReader
             }
         }
 
-        throw new IOException($"Failed to read '{RegistryFilePath}' after multiple retries.", lastError);
+        throw new IOException($"Failed to read '{_registryFilePath}' after multiple retries.", lastError);
     }
 
     /// <summary>Shape of each value in the JSON object, matched to the real on-disk field names via camelCase policy.</summary>

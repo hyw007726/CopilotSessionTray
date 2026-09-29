@@ -17,12 +17,24 @@ namespace CopilotSessionTray.Core.Services;
 /// </summary>
 public sealed class AppStateStore : IAppStateStore
 {
-    private static readonly string StateFilePath = Path.Combine(
+    private static readonly string DefaultStateFilePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CopilotSessionTray", "app-state.json");
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
+    private readonly string _stateFilePath;
     private readonly SemaphoreSlim _fileLock = new(1, 1);
+
+    /// <summary>
+    /// Creates a store against the real <c>app-state.json</c>. An explicit
+    /// <paramref name="stateFilePath"/> override exists solely so xUnit tests can point this at a
+    /// temp file instead of the real per-user profile location — every real call site uses the
+    /// parameterless default.
+    /// </summary>
+    public AppStateStore(string? stateFilePath = null)
+    {
+        _stateFilePath = stateFilePath ?? DefaultStateFilePath;
+    }
 
     public async Task<SessionReadMarker?> GetReadMarkerAsync(string sessionId, CancellationToken cancellationToken = default)
     {
@@ -96,9 +108,9 @@ public sealed class AppStateStore : IAppStateStore
             var state = await LoadUnlockedAsync(cancellationToken).ConfigureAwait(false);
             mutate(state);
 
-            var directory = Path.GetDirectoryName(StateFilePath)!;
+            var directory = Path.GetDirectoryName(_stateFilePath)!;
             Directory.CreateDirectory(directory);
-            await using var stream = File.Create(StateFilePath);
+            await using var stream = File.Create(_stateFilePath);
             await JsonSerializer.SerializeAsync(stream, state, JsonOptions, cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -107,16 +119,16 @@ public sealed class AppStateStore : IAppStateStore
         }
     }
 
-    private static async Task<StoredState> LoadUnlockedAsync(CancellationToken cancellationToken)
+    private async Task<StoredState> LoadUnlockedAsync(CancellationToken cancellationToken)
     {
-        if (!File.Exists(StateFilePath))
+        if (!File.Exists(_stateFilePath))
         {
             return new StoredState();
         }
 
         try
         {
-            await using var stream = File.OpenRead(StateFilePath);
+            await using var stream = File.OpenRead(_stateFilePath);
             return await JsonSerializer.DeserializeAsync<StoredState>(stream, JsonOptions, cancellationToken).ConfigureAwait(false)
                 ?? new StoredState();
         }

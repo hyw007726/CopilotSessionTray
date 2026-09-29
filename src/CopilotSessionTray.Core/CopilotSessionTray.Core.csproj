@@ -11,4 +11,12 @@
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Lets Core.Tests exercise internal-only pure-logic helpers (e.g. CopilotTerminalLauncher's
+         script-content building) directly, without making them part of Core's public API. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>CopilotSessionTray.Core.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
 </Project>

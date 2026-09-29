@@ -41,8 +41,16 @@ public interface IYoloTaskRunner
     /// </summary>
     /// <param name="prompt">The task prompt to seed the new session with.</param>
     /// <param name="workingDirectory">The workspace/repo folder to run in.</param>
+    /// <param name="allowAllPermissions">
+    /// When true (the default — "yolo" implies full permissions unless a caller opts out), sets
+    /// <c>COPILOT_ALLOW_ALL=true</c> for the launched process, auto-approving tool/path/url
+    /// actions <em>and</em> trusting the working directory without prompting. Added as an
+    /// optional parameter (not assumed always-true) because the real "start new task" panel gives
+    /// the user an explicit checkbox for this, unchecked by default — see IMPLEMENTATION_PLAN.md §5.
+    /// </param>
     /// <param name="cancellationToken">Token to cancel before the process is launched.</param>
-    Task StartInteractiveAsync(string prompt, string workingDirectory, CancellationToken cancellationToken = default);
+    Task StartInteractiveAsync(
+        string prompt, string workingDirectory, bool allowAllPermissions = true, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Runs an unattended, non-interactive Copilot CLI task

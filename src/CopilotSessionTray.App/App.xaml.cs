@@ -1,5 +1,9 @@
 ﻿using System.Windows;
 using System.Windows.Threading;
+using CopilotSessionTray.App.ViewModels;
+using CopilotSessionTray.Core.Contracts;
+using CopilotSessionTray.Core.Services;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace CopilotSessionTray.App;
 
@@ -9,6 +13,7 @@ namespace CopilotSessionTray.App;
 public partial class App : Application
 {
     private MainWindow? _mainWindow;
+    private ServiceProvider? _serviceProvider;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -22,12 +27,37 @@ public partial class App : Application
         // vanishing, is worth it even though this only catches exceptions on this one thread.
         DispatcherUnhandledException += OnDispatcherUnhandledException;
 
+        // DI composition root — added 2026-09-29 per IMPLEMENTATION_PLAN.md §9.1 ("no DI
+        // container" gap): everything below used to be `new OpenSessionsRegistryReader()` etc.
+        // field initializers directly inside TrayViewModel. All singletons: there's exactly one
+        // tray icon/ViewModel/window for this app's entire lifetime, same as before — this only
+        // changes *where* the object graph is built, not how long anything lives.
+        var services = new ServiceCollection();
+        ConfigureServices(services);
+        _serviceProvider = services.BuildServiceProvider();
+
         // Construct the window that owns the TaskbarIcon, but never Show()
         // it — ForceCreate() makes the Win32 tray icon appear regardless.
         // The window itself only becomes visible as the popup when the
         // user clicks the tray icon (see MainWindow.xaml.cs).
-        _mainWindow = new MainWindow();
+        _mainWindow = _serviceProvider.GetRequiredService<MainWindow>();
         _mainWindow.InitializeTrayIcon();
+    }
+
+    private static void ConfigureServices(IServiceCollection services)
+    {
+        services.AddSingleton<IOpenSessionsRegistryReader, OpenSessionsRegistryReader>();
+        services.AddSingleton<IProcessLivenessChecker, ProcessLivenessChecker>();
+        services.AddSingleton<ISessionHistoryStore, SessionHistoryStore>();
+        // Deliberately concrete, not behind an interface — see SessionLockFileInspector's own doc
+        // comment for why it isn't one of the reviewed Core contracts.
+        services.AddSingleton<SessionLockFileInspector>();
+        services.AddSingleton<ISessionLauncher, SessionLauncher>();
+        services.AddSingleton<IYoloTaskRunner, YoloTaskRunner>();
+        services.AddSingleton<IAppStateStore, AppStateStore>();
+
+        services.AddSingleton<TrayViewModel>();
+        services.AddSingleton<MainWindow>();
     }
 
     private static void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
@@ -43,6 +73,7 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         _mainWindow?.ShutdownTrayIcon();
+        _serviceProvider?.Dispose();
         base.OnExit(e);
     }
 }

@@ -12,14 +12,27 @@ namespace CopilotSessionTray.Core.Services;
 /// </summary>
 public sealed class SessionHistoryStore : ISessionHistoryStore
 {
-    private static readonly string DatabasePath = Path.Combine(
+    private static readonly string DefaultDatabasePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".copilot", "session-store.db");
 
-    private static readonly string ConnectionString = new SqliteConnectionStringBuilder
+    private readonly string _databasePath;
+    private readonly string _connectionString;
+
+    /// <summary>
+    /// Creates a store against the real <c>session-store.db</c>. An explicit
+    /// <paramref name="databasePath"/> override exists solely so xUnit tests can point this at a
+    /// temp fixture database instead of the real <c>.copilot</c> folder — every real call site
+    /// uses the parameterless default.
+    /// </summary>
+    public SessionHistoryStore(string? databasePath = null)
     {
-        DataSource = DatabasePath,
-        Mode = SqliteOpenMode.ReadOnly,
-    }.ToString();
+        _databasePath = databasePath ?? DefaultDatabasePath;
+        _connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = _databasePath,
+            Mode = SqliteOpenMode.ReadOnly,
+        }.ToString();
+    }
 
     public async Task<IReadOnlyList<SessionSummary>> GetRecentSessionsAsync(int maxCount, CancellationToken cancellationToken = default)
     {
@@ -124,7 +137,7 @@ public sealed class SessionHistoryStore : ISessionHistoryStore
     /// live Copilot CLI processes, so a momentary lock conflict is expected, not exceptional, per
     /// this interface's documented contract.
     /// </summary>
-    private static async Task<T> ExecuteWithRetryAsync<T>(Func<SqliteConnection, Task<T>> query, CancellationToken cancellationToken)
+    private async Task<T> ExecuteWithRetryAsync<T>(Func<SqliteConnection, Task<T>> query, CancellationToken cancellationToken)
     {
         const int busyErrorCode = 5;
         const int lockedErrorCode = 6;
@@ -134,7 +147,7 @@ public sealed class SessionHistoryStore : ISessionHistoryStore
         {
             try
             {
-                using var connection = new SqliteConnection(ConnectionString);
+                using var connection = new SqliteConnection(_connectionString);
                 await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
                 return await query(connection).ConfigureAwait(false);
             }
@@ -145,6 +158,6 @@ public sealed class SessionHistoryStore : ISessionHistoryStore
             }
         }
 
-        throw new IOException($"'{DatabasePath}' stayed busy/locked after multiple retries.", lastError);
+        throw new IOException($"'{_databasePath}' stayed busy/locked after multiple retries.", lastError);
     }
 }
