@@ -2,6 +2,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
+using CopilotSessionTray.App.Services;
 using CopilotSessionTray.App.ViewModels;
 
 namespace CopilotSessionTray.App;
@@ -19,10 +20,13 @@ public partial class MainWindow : Window
     // right before the "start new task" window appears on top of it.
     private readonly DispatcherTimer _singleClickTimer;
 
-    public MainWindow(TrayViewModel viewModel)
+    private readonly NotificationService _notificationService;
+
+    public MainWindow(TrayViewModel viewModel, NotificationService notificationService)
     {
         InitializeComponent();
         DataContext = viewModel;
+        _notificationService = notificationService;
         _singleClickTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
         _singleClickTimer.Tick += (_, _) =>
         {
@@ -33,9 +37,16 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// Forces the Win32 tray icon to exist even though this window is never
-    /// shown at startup. Called once from <c>App.OnStartup</c>.
+    /// shown at startup. Called once from <c>App.OnStartup</c>. Also hands the now-created
+    /// <c>TaskbarIcon</c> to <see cref="NotificationService"/> — see
+    /// <see cref="Services.NotificationService.AttachTrayIcon"/> for why this can't just be done
+    /// via a constructor dependency the other way around instead.
     /// </summary>
-    public void InitializeTrayIcon() => TrayIcon.ForceCreate();
+    public void InitializeTrayIcon()
+    {
+        TrayIcon.ForceCreate();
+        _notificationService.AttachTrayIcon(TrayIcon);
+    }
 
     /// <summary>Releases the tray icon's native resources on app shutdown.</summary>
     public void ShutdownTrayIcon() => TrayIcon.Dispose();
@@ -65,6 +76,9 @@ public partial class MainWindow : Window
     }
 
     private void ShowSessions_Click(object sender, RoutedEventArgs e) => TogglePopup(forceShow: true);
+
+    /// <summary>Clicking a finished-session balloon notification reopens the popup — the same as clicking the tray icon itself.</summary>
+    private void TrayIcon_TrayBalloonTipClicked(object sender, RoutedEventArgs e) => TogglePopup(forceShow: true);
 
     private void Window_Deactivated(object? sender, EventArgs e)
     {

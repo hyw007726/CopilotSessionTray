@@ -41,7 +41,8 @@
                         ToolTipText="{Binding ToolTipText}"
                         MenuActivation="RightClick"
                         TrayLeftMouseUp="TrayIcon_TrayLeftMouseUp"
-                        TrayLeftMouseDoubleClick="TrayIcon_TrayLeftMouseDoubleClick">
+                        TrayLeftMouseDoubleClick="TrayIcon_TrayLeftMouseDoubleClick"
+                        TrayBalloonTipClicked="TrayIcon_TrayBalloonTipClicked">
             <tb:TaskbarIcon.IconSource>
                 <!--
                     FontSize/TextMargin are both bound (not literal): GeneratedIconSource always

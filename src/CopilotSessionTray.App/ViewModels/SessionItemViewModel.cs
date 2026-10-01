@@ -22,20 +22,28 @@ public sealed partial class SessionItemViewModel : ObservableObject
         string detail,
         TimeSpan elapsed,
         bool isUnread,
-        string? workingDirectory = null)
+        string? workingDirectory = null,
+        string? realSummary = null)
     {
         Id = id;
         _displayName = displayName;
-        Status = status;
-        Detail = detail;
-        Elapsed = elapsed;
+        _status = status;
+        _detail = detail;
+        _elapsed = elapsed;
         _isUnread = isUnread;
         WorkingDirectory = workingDirectory;
 
-        // Demo stand-in for what Phase 2 would source from Copilot CLI's own
-        // last checkpoint overview (ISessionHistoryStore.GetCheckpointsAsync)
-        // — see ISessionLauncher.StartNewSessionFromSummaryAsync.
-        Summary = $"Summary of prior work on {displayName}: {detail} (last status: {StatusLabelFor(status)}).";
+        // realSummary is the real Copilot CLI checkpoint overview/session title text resolved by
+        // TrayViewModel.GetResumeSummaryAsync for real (non-demo) sessions — see that method's doc
+        // comment for the 2026-10-01 bug this fixes: this constructor used to *always* fabricate a
+        // templated sentence here regardless of whether real data was available, producing
+        // nonsense like "Summary of prior work on Architect: C:\Git (last status: Closed)." for
+        // real, closed sessions instead of an actual summary of what was worked on. Only demo rows
+        // (which never pass realSummary) still get that fabricated placeholder — fine for them
+        // since it's just exercising the UI with fake data to begin with.
+        Summary = !string.IsNullOrWhiteSpace(realSummary)
+            ? realSummary
+            : $"Summary of prior work on {displayName}: {detail} (last status: {StatusLabelFor(status)}).";
     }
 
     public string Id { get; }
@@ -48,9 +56,10 @@ public sealed partial class SessionItemViewModel : ObservableObject
     public string? WorkingDirectory { get; }
 
     /// <summary>
-    /// A short AI-written recap of the session, sourced from Copilot CLI's
-    /// own checkpoints in the real implementation — this app never
-    /// generates it itself. Fixed at construction, independent of any later
+    /// For real sessions: the session's own most recent checkpoint overview (or, failing that,
+    /// its title/summary field) — genuine Copilot CLI-written content, this app never generates
+    /// it itself. For Phase 1 demo rows only: a fabricated placeholder sentence, since there's no
+    /// real checkpoint data behind a fake id. Fixed at construction, independent of any later
     /// local rename via <see cref="DisplayName"/>.
     /// </summary>
     public string Summary { get; }
@@ -65,11 +74,23 @@ public sealed partial class SessionItemViewModel : ObservableObject
     [ObservableProperty]
     private string _displayName;
 
-    public SessionStatus Status { get; }
+    /// <summary>
+    /// The session's current status — mutable (not just constructor-set) since 2026-09-29: the
+    /// continuous background poll (<c>TrayViewModel</c>'s <c>ISessionDetectionEngine</c>-driven
+    /// monitor) patches this in place on a real <c>Working</c>/<c>Finished</c>/<c>Closed</c>
+    /// transition, rather than removing and re-adding the whole row.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(StatusLabel))]
+    [NotifyPropertyChangedFor(nameof(StatusBrush))]
+    private SessionStatus _status;
 
-    public string Detail { get; }
+    [ObservableProperty]
+    private string _detail;
 
-    public TimeSpan Elapsed { get; }
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ElapsedLabel))]
+    private TimeSpan _elapsed;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(UnreadDotVisibility))]

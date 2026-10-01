@@ -1,6 +1,6 @@
 # Copilot Session Tray — Implementation Plan
 
-Status: **Phase 1 done; Phase 2 substantially complete — all 9 Core interfaces now have real implementations (see §10), 41 xUnit tests passing, real persistence wired end-to-end. Phase 0.5 contracts still pending your review. See §9.1 for the 2026-09-29 design-review pass and how each finding was resolved.**
+Status: **Phase 1 done; Phase 2 complete; Phase 3 (detection engine wire-up) and Phase 4 (notifications) now substantially complete — 64 xUnit tests passing, all 9 Core interfaces implemented, and a real continuous background monitor now drives the tray icon/unread badge/notifications end-to-end, verified against this machine's real, currently-open Copilot sessions. See §9.1/§10 Phase 3 for the 2026-09-29 notification-mechanism decision (made autonomously — user unavailable to confirm — and how it was verified. Phase 0.5 contracts still pending your review.**
 Scope: personal local-use desktop utility (Windows)
 
 > **⚠️ Privacy reminder (applies to every phase, not just today's demo data):**
@@ -214,12 +214,12 @@ Proposed `Core` contracts:
 | Interface | Responsibility |
 |---|---|
 | `IOpenSessionsRegistryReader` | Read/watch `open-sessions-state.json`; expose current `working`/`refreshedAt` per session id. |
-| `ISessionEventStreamReader` | Tail a session's `events.jsonl` from a given offset; yield new events (`turn_end`, `task_complete`, `shutdown`, ...). |
+| `ISessionEventStreamReader` | Tail a session's `events.jsonl` from a given offset; yield new events (`turn_end`, `task_complete`, `shutdown`, ...). **Implemented and wired** (`Services.SessionEventStreamReader`, driven by `SessionDetectionEngine`'s continuous poll) — see §10 Phase 3. |
 | `ISessionHistoryStore` | Read-only queries against `session-store.db` (`sessions`, `turns`, `checkpoints`) for metadata/history/search. |
 | `IProcessLivenessChecker` | Given a PID (from an `inuse.<pid>.lock` file), report whether the owning process is alive; list running `copilot` processes. |
 | `IAppStateStore` | Persist/retrieve our own state: last-seen markers per session, mute/watch-list/quiet-hours preferences — separate from `.copilot`. |
-| `ISessionDetectionEngine` | The "brain": consumes the readers above, diffs successive polls, and emits state-change events (`SessionStarted`, `SessionWorkingChanged`, `SessionFinished`, `SessionClosed`). Most important contract to review closely since it defines the whole detection model. |
-| `INotificationService` | Dispatch a toast/notification for a finished session; fakeable in tests, swappable if the notification mechanism changes later. |
+| `ISessionDetectionEngine` | The "brain": consumes the readers above, diffs successive polls, and emits state-change events (`SessionStarted`, `SessionWorkingChanged`, `SessionFinished`, `SessionClosed`). Most important contract to review closely since it defines the whole detection model. **Implemented and wired** (`Services.SessionDetectionEngine`) — driven continuously by `TrayViewModel.StartMonitoring()`'s 3s timer for the app's entire lifetime, see §9.1/§10 Phase 3. |
+| `INotificationService` | Dispatch a toast/notification for a finished session; fakeable in tests, swappable if the notification mechanism changes later. **Implemented and wired** (`Services.NotificationService`, classic `TaskbarIcon.ShowNotification` balloon — see §9.1/§10 Phase 3 for the mechanism decision, made autonomously since the user was unavailable to confirm). |
 | `ISessionLauncher` *(added post-Phase 0.5)* | Resume a session, or start a new one seeded from a summary, in an external terminal. **Implemented** (`Services.SessionLauncher`) and called through by `TrayViewModel` — see §9.1/§10 Phase 2. |
 | `IYoloTaskRunner` *(added post-Phase 0.5)* | Run an unattended "start new task" request (prompt + workspace + permission level) and report back a `YoloTaskResult`. **Implemented** (`Services.YoloTaskRunner`), including the previously-unused `RunHeadlessAsync` — see §9.1/§10 Phase 2. |
 
@@ -336,6 +336,8 @@ here as open questions, then acted on the same day per "decide, don't ask"
 — resolutions below; two real bugs found in the same original pass (a
 hardcoded-stale tray menu label, and a non-deterministic lock-file pick in
 `SessionLockFileInspector`) were fixed separately and aren't repeated here.
+A third real bug, reported by the user on 2026-10-01, is also fixed
+separately — see §9.2.
 
 - **`ISessionLauncher`/`IYoloTaskRunner` were unused — resolved: retrofitted.**
   `Core.Services.SessionLauncher`/`YoloTaskRunner` are now real
@@ -408,6 +410,210 @@ hardcoded-stale tray menu label, and a non-deterministic lock-file pick in
   `AppStateStore`'s in-process `SemaphoreSlim` doesn't protect
   `app-state.json` against two *process* instances writing at once,
   relevant only once §5 item 9's single-instance guard is being designed.
+
+### 9.2 Bug fix (2026-10-01): "Resume with Summary" seeded a nonsense prompt
+
+**Reported by the user**: resuming a real, closed session ("Architect",
+`cwd=C:\Git`) via "Resume with Summary" seeded the new session with the
+literal prompt *"Summary of prior work on Architect: C:\Git (last status:
+Closed)."* — read by the user as a possible wrong/garbled working
+directory.
+
+**Root cause**: `SessionItemViewModel.Summary` always fabricated that
+templated sentence from the display name/detail/status fields — it never
+actually called `ISessionHistoryStore.GetCheckpointsAsync` despite
+`ISessionLauncher.StartNewSessionFromSummaryAsync`'s own doc comment always
+describing that as the design (a session's most recent real
+`SessionCheckpoint.Overview`, which Copilot CLI already writes during a
+session). This bug predates the 2026-09-29 retrofit pass — it was a Phase 1
+demo placeholder that simply never got replaced once real session data was
+wired up in Phase 2, so every "Resume with Summary" click for a *real*
+session was silently seeding the new terminal with fabricated nonsense
+instead of an actual summary. The `C:\Git` in the user's example was not
+itself wrong (confirmed directly against the real `session-store.db`: that
+session's `cwd` genuinely is `C:\Git`, since this whole project's CLI
+sessions are invoked from that root) — it just looked wrong once mashed
+into a fake sentence with no real content behind it.
+
+**Fix**: added `TrayViewModel.GetResumeSummaryAsync(sessionId, fallback)`,
+called from both `BuildOpenSessionItemAsync`/`BuildClosedSessionItemAsync`,
+which resolves real text in priority order: (1) the session's most recent
+checkpoint `Overview`, (2) its own title/summary field
+(`SessionSummary.Summary`), (3) a plain, honest "No summary is available
+for this session yet." message — never a fabricated sentence.
+`SessionItemViewModel`'s constructor gained an optional `realSummary`
+parameter; when provided (every real-session call site) it's used as-is,
+and the old placeholder formula now only ever applies to the Phase 1 demo
+rows (0-4), which still legitimately have no real data behind them.
+Defensively truncates at 4000 characters (`TruncateForResumePrompt`) since
+the fallback title/summary field can occasionally hold a session's entire
+raw system prompt verbatim for some automated/scripted session types
+(confirmed empirically against real data) — many KB of that embedded in
+the generated launch script's `copilot -i "..."` line would silently
+overflow cmd.exe's ~8191-character single-line limit.
+
+**Verified**: against the real `session-store.db`, directly confirmed the
+"Architect" session's real checkpoint overview is substantive, genuine
+content (two checkpoints, 779/903 characters) — and reflectively invoked
+the actual shipped `GetResumeSummaryAsync` method (not a reimplementation)
+against it, confirming it now returns that real overview instead of the
+old fabricated sentence. Also verified the fallback chain for a
+nonexistent session id (no checkpoints: falls back to a provided title, or
+the honest "no summary" message if nothing at all is available) and the
+truncation guard (a 10,000-character input correctly truncated to ~4014
+characters). All 64 existing xUnit tests still pass unaffected (this fix
+only touches App-layer code with no dedicated unit tests yet, consistent
+with the rest of `TrayViewModel`/`SessionItemViewModel`).
+
+#### Follow-up (same day): the no-checkpoint fallback was itself too thin
+
+**Reported by the user** (with a screenshot of the real Copilot CLI TUI):
+after the fix above, resuming a session still produced a near-useless
+prompt — a brand new session seeded with literally *"Summarize Architect
+Work"*, causing the real agent to reasonably reply "there's no prior
+context... I'm trying to figure out what the user is actually referring
+to."
+
+**Root cause, traced via direct inspection of the real `session-store.db`
+and the resulting session's own real `events.jsonl`**: the user resumed
+from a *different*, confusingly-similar-titled session than they intended.
+The original "Architect" session (`51e349a0...`, 2 real checkpoints) was
+last updated 2026-09-29, so it had scrolled out of the "10 most recent
+closed sessions" list by now. A short, one-turn *derivative* session
+(`dbf7671b...`, created earlier the same day — itself a byproduct of the
+pre-fix bug above, title auto-generated as "Summarize Architect Work") was
+more recent, so it appeared in that list instead, easily mistaken for the
+original given the near-identical name. That derivative session has **zero
+checkpoints**, so the (correctly working) fix above fell through to its
+bare title field exactly as designed — but a 3-word auto-generated title
+carries essentially no real content for a brand new, zero-context session
+to act on. This is a real, general gap, not specific to this one session:
+*any* short session that never reaches a checkpoint hits the same thin
+fallback.
+
+**Fix**: added a new middle tier to `GetResumeSummaryAsync`'s fallback
+chain, between the checkpoint overview and the bare title —
+`BuildTurnsFallbackSummary`, which pulls the session's actual
+`ISessionHistoryStore.GetTurnsAsync` history (real stored
+`SessionTurn.UserMessage`/`AssistantResponse` rows) and recaps "Originally
+asked: ..." (first turn's user message) + "Most recent outcome: ..." (last
+turn's assistant response). Only falls through to the bare title if there
+are no turns either (a session that was opened but never actually
+exchanged a message). Updated priority order is now: (1) latest checkpoint
+overview, (2) turns-based recap, (3) bare title/summary field, (4) honest
+"no summary available" message.
+
+**Verified** against the real `dbf7671b` derivative session (the exact one
+from the user's screenshot): confirmed it has 0 checkpoints and exactly 1
+turn, and that the new turns-based recap now surfaces that turn's real
+content instead of the bare title — strictly richer and directly sourced
+from the session, even though in this *specific* degraded case the turn's
+own content is itself a quote of the original bug (an inherent limit: no
+fallback tier can manufacture context that was never captured in the first
+place). Separately re-confirmed the original "Architect" session's 2 real
+checkpoints are untouched and still take priority, so normal/common
+sessions are unaffected by this change. All 69 existing xUnit tests
+(Core-only — this fix is entirely in App-layer `TrayViewModel`, like the
+fix above) still pass.
+
+**Known remaining gap, not fixed here (noted, not acted on without a
+decision)**: nothing currently prevents the "telephone game" of repeatedly
+resuming-from-a-resume, nor visually distinguishes a derivative session
+from its original in the history list — a user can still pick the wrong,
+already-degraded entry by name alone. A real fix would need this app to
+track provenance locally (e.g. "session X was created via Resume-with-
+Summary, sourced from session Y") via `IAppStateStore`, since Core's
+`.copilot` access is strictly read-only and Copilot CLI's own data has no
+such concept. Left as a known gap rather than guessed at, since it's a
+real design/UX choice (badge in the list? collapse/hide derivatives?
+block chaining entirely?) rather than a one-line fix.
+
+#### Follow-up (same day): the resumed session carried no trace of its origin
+
+**Reported by the user**, with a screenshot of Copilot CLI's own real
+`/resume` tip ("Switch sessions by local or cloud history ID, task ID, or
+name") shown directly above a freshly-resumed-with-summary session: none
+of those three things — id, task id, or name — were anywhere in the new
+session's content. This is precisely the "known remaining gap" flagged
+above, now reported directly by the user with concrete evidence rather
+than a hypothetical.
+
+**Fix**: every tier of `GetResumeSummaryAsync`'s fallback chain (checkpoint
+overview, turns recap, bare title, "no summary" message) is now wrapped by
+a new `BuildSummaryWithProvenanceHeader`, which prepends a short, always-
+present header: the real session id — the exact same id this app's own
+"Resume with history" action already passes to `copilot --resume=<id>`, so
+it's confirmed resumable the same way via Copilot CLI's own `/resume <id>`
+slash command too — plus the session's title if known, plus an explicit
+`/resume <id>` hint, framed as background context rather than an
+instruction, so the receiving agent reads it as metadata rather than
+something to act on. Since `SessionItemViewModel.Summary` (this same text)
+is also what the summary panel displays read-only, the id is now visible
+there too, not just in the newly-seeded session.
+
+Note this doesn't fully close the "known remaining gap" above — it makes
+the *original* session's id discoverable and directly resumable from
+within the derived session/summary panel (so a user who ends up on a
+degraded derivative can now trace or jump back to the real original by
+hand), but still doesn't *prevent* picking a degraded derivative in the
+first place, or label it as one in the list. Left as a smaller, directly
+actionable fix now; the bigger provenance-tracking question above remains
+open.
+
+**Verified**: defensively bounded the title portion of the new header to
+80 characters separately from the body's own 4000-character truncation —
+necessary because the same raw-system-prompt edge case that motivated the
+body's truncation could otherwise sneak back in through this new "title"
+path unbounded; confirmed via a reflective scratch harness against a
+5000-character pathological title that the header's title segment never
+contains the untruncated input and the total output stays comfortably
+under cmd.exe's real ~8191-character limit. Also reflectively re-verified,
+against the exact real sessions from both fixes above (the real
+"Architect" checkpoint-bearing session, and the degraded `dbf7671b`
+turns-only derivative), that the header now correctly shows each one's
+real id/title while the underlying body content from the prior two fixes
+is still intact and unchanged. All 69 existing tests pass (Core-only —
+this fix, like the two before it, is entirely in App-layer
+`TrayViewModel`). Verified the real compiled app — which was live and
+running, serving the user, for both of today's prior fixes too — stays
+responsive after being restarted with this change.
+
+#### Follow-up (same day): make the live view the default, not a 6-click cycle
+
+**Requested by the user**, alongside asking that the live view's session
+names/ids be double-checked for correctness (re-verified as part of this
+same change — see below; both call sites already used the real, full
+session id and a real resolved name, no defect found there).
+
+**Change**: `StartMonitoring()` (the one real call site, invoked once from
+`App.xaml.cs`'s `OnStartup` right after the tray icon exists) now also
+kicks off `LoadLiveSessionsScenarioAsync()` immediately, and
+`_demoScenarioIndex` now starts at `5` (the live scenario's own index)
+instead of its implicit default of `0`. The constructor itself still seeds
+harmless demo scenario 0 as a brief placeholder (kept deliberately
+side-effect-free, consistent with its existing documented design, for any
+future unit test that constructs this ViewModel directly without going
+through the real app startup path) — in the real running app this is
+visible for well under a second before `StartMonitoring()` replaces it.
+"Cycle demo data" needed **no changes at all**: it still walks the exact
+same `0,1,2,3,4,5,0,...` sequence as always, just starting one step further
+along, so every demo state (0-4) remains exercisable on demand exactly as
+before, per the user's explicit ask to keep that working.
+
+**Verified**: a scratch harness constructing the real `TrayViewModel`
+exactly as `App.xaml.cs` does, then calling the real `StartMonitoring()`
+and inspecting `Sessions`/`IsShowingLiveData` afterward, confirmed: (1) the
+view immediately after startup is live (`IsShowingLiveData == true`,
+`HeaderSubtitleText` shows the "🟢 LIVE" text, 11 real sessions loaded from
+this machine's real `.copilot` data — none of them fake `demo-N` ids);
+(2) every single loaded session's id parses as a real GUID (confirming
+each one is the same kind of id already proven usable with
+`copilot --resume=<id>`/`/resume <id>`, not a truncated or synthesized
+value); (3) cycling 6 times in a row from this starting point produces the
+expected `demo,demo,demo,demo,demo,LIVE` sequence, confirming the existing
+cycle mechanism is completely undisturbed. All 69 tests still pass. The
+real compiled app was stopped, rebuilt, and relaunched with this change —
+confirmed responsive afterward.
 
 ## 10. Milestones
 
@@ -486,10 +692,11 @@ hardcoded-stale tray menu label, and a non-deterministic lock-file pick in
      open ones (same history query as `ShowSessionHistory`, minus anything
      already shown as open — verified no duplicate ids), so this one view
      answers both "what's open" and "what did I just finish" at a glance.
-     Deliberately **not yet implemented**:
+     Deliberately **not yet implemented (as of the section above):**
      `events.jsonl` tailing, `ISessionDetectionEngine`'s real stateful
      diffing/polling loop (this scenario is a one-shot snapshot, not a
-     poll), notifications.
+     poll), notifications. **Update below (§10 Phase 3): the first two are
+     now done.**
    - **2026-09-29: `IAppStateStore` persistence wired up, and 41 xUnit
      tests added** (§9.1) — `Core.Tests` was empty until this pass. All 4
      original services plus the two new ones below got a constructor-
@@ -520,12 +727,140 @@ hardcoded-stale tray menu label, and a non-deterministic lock-file pick in
      a latent correctness risk for the live-session detection path if a
      session folder ever held more than one lock file.
 5. **Phase 3 — Wire-up**: detection engine drives real tray icon state +
-   popup session list.
+   popup session list. **In progress, 2026-09-29**: the two remaining
+   unimplemented Core contracts now have real implementations, both fully
+   covered by xUnit tests (64 total, up from 41):
+   - `SessionEventStreamReader` (`ISessionEventStreamReader`) — tails a
+     session's `events.jsonl` from a byte offset; real on-disk shape
+     (top-level `type`/`timestamp`/`data`/`id`/`parentId` per line)
+     re-verified against a real, populated file. Scans raw bytes (not the
+     decoded string) for the newline that ends the last *complete* line, so
+     a partial line still being appended mid-write is never parsed and
+     `NextByteOffset` never skips past it — also keeps the offset
+     byte-exact for multi-byte UTF-8 content. Unrecognized/invalid lines
+     degrade gracefully (mapped to `SessionEventKind.Unknown`, or skipped
+     entirely if not valid JSON at all) per the interface's contract.
+   - `SessionDetectionEngine` (`ISessionDetectionEngine`) — the stateful
+     poll-diffing "brain". Reuses the exact same "genuinely open" rule as
+     `TrayViewModel.LoadLiveSessionsScenarioAsync` (lock file + process
+     liveness + freshest-per-pid), so both paths agree on what counts as
+     open. Enforces the §3/§9 "signal authority" rule literally in code:
+     `SessionStatus`/`SessionChangeKind` are decided purely from the
+     registry's `Working` flag + process liveness on every poll, never
+     from an `events.jsonl` event type — `events.jsonl` is tailed only to
+     attach `SessionChangeEvent.LatestEvent` as enrichment detail, and a
+     failure reading it is swallowed rather than affecting the reported
+     status. `Working` flag `true→false` emits `Finished` (status becomes
+     `SessionStatus.Finished`, not just `WaitingForInput` — the one
+     "candidate for notification" signal, since steady-state idling emits
+     nothing further); `false→true` emits `WorkingStateChanged`; a
+     session dropping out of the genuinely-open set (process gone, or
+     superseded by a fresher session sharing its pid) emits `Closed`.
+   - **Deliberately not yet done, pending a decision (see below)**:
+     wiring either of these into the running app — i.e. an actual
+     recurring poll loop, `INotificationService`'s concrete
+     implementation, and replacing/augmenting the manual "cycle to live
+     scenario 5" snapshot with continuously-updating real data. Paused
+     here rather than guessed at, since the notification mechanism choice
+     has real trade-offs (see the open question below) that affect the
+     app's distribution model (§11) — the user asked to be paused for
+     exactly this kind of decision rather than have it silently assumed.
+
+   **Decision made 2026-09-29 — user was unavailable to confirm, so resolved autonomously per
+   the recommendation below (stated as an assumption, per "decide, don't ask" for unresolvable
+   ambiguity when no one can weigh in) and then implemented + verified the same day:**
+   `INotificationService`'s concrete mechanism —
+   1. **Simple** *(chosen)*: `H.NotifyIcon`'s built-in `TaskbarIcon.ShowNotification(title, body, NotificationIcon.Info)`
+      (classic `Shell_NotifyIcon` balloon, still renders as a modern toast-style
+      popup on Windows 10/11). No extra setup, no new dependency, keeps the
+      current xcopy/zip distribution model completely unchanged. No action
+      buttons (§6's "Copy resume command · Open folder · Dismiss" would not
+      be possible this way) — clicking the balloon reactivates the popup
+      instead (`TaskbarIcon.TrayBalloonTipClicked` → same code path as a
+      single tray-icon click).
+   2. **Rich** *(not chosen — revisit later if wanted)*: `Microsoft.Toolkit.Uwp.Notifications`-style
+      Windows App notifications with real action buttons, per §6's original
+      sketch. Requires registering an AUMID + a Start Menu shortcut (a small
+      one-time setup step, not full MSIX packaging) so Windows knows what
+      app owns the toast/its actions — directly touches the "revisit only
+      if an AUMID need emerges" note in §11.
+   Implemented as `Services.NotificationService` (App project, not Core —
+   it's the one real service whose entire job requires a live WPF
+   `TaskbarIcon`, so it can't live in UI-agnostic Core the way every other
+   real service does). Registered as its own concrete DI singleton (not just
+   behind `INotificationService`) so `MainWindow` can call
+   `AttachTrayIcon(TrayIcon)` once the tray icon exists, without a circular
+   constructor dependency (`MainWindow` → `TrayViewModel` → `NotificationService` → `MainWindow`
+   would otherwise result from taking `INotificationService`/`MainWindow` as
+   mutual constructor parameters).
+
+   Also decided the same way (no one available to confirm): the app now polls
+   **continuously from startup** — `TrayViewModel.StartMonitoring()` (called
+   once from `App.OnStartup`, after the tray icon/notification wiring exists)
+   starts a 3-second `DispatcherTimer` that calls `ISessionDetectionEngine.PollAsync()`
+   for the app's entire lifetime, regardless of which demo scenario (if any)
+   is currently displayed or whether the popup is even open — matching this
+   app's whole reason to exist (§1: notice a finished session while not
+   looking). Design choices worth recording:
+   - **Notifications fire unconditionally on every `Finished` transition**
+     (mute-gated, checked fresh from `IAppStateStore` each time), but
+     **`Sessions` (the visible list) is only patched while `IsShowingLiveData`
+     is true** — otherwise a background transition would silently corrupt
+     whatever fake demo scenario (0-4) happens to be on screen. Scenario
+     5's one-shot `LoadLiveSessionsScenarioAsync` load and the continuous
+     monitor's per-tick patching now share one `BuildOpenSessionItemAsync`
+     helper (title resolution, rename override, formatting), so both stay
+     consistent.
+   - A closed session is **patched to `Status = Closed` in place, not
+     removed** — so the user can see "that one just closed" rather than a
+     row silently vanishing.
+   - Re-entrancy guard (`_isPolling`): `PollAsync` is documented as not
+     safe to call concurrently; a `DispatcherTimer` doesn't wait for an
+     `async void` tick handler, so a slow poll could otherwise overlap
+     with the next tick. Ticks are skipped (not queued) while a previous
+     one is still running.
+   - The already-existing "Mute notifications" checkbox was, until now, a
+     pure in-memory toggle with a literal "Phase 2" placeholder comment —
+     fixed as part of this same pass (`OnIsMutedChanged` now persists via
+     `IAppStateStore`; `StartMonitoring` loads the persisted value at
+     startup), since mute needed to be real for notification-gating to
+     mean anything.
+   - **Not done in this pass, deliberately deferred**: quiet hours/
+     watch-list filtering (`NotificationPreferences` already has the
+     fields; no settings UI exists yet to set them, and the user has said
+     a settings panel is a *future*, not current, ask); a single-instance
+     guard (§10 Phase 5 stretch, unrelated to this specific gap); fully
+     unifying `LoadLiveSessionsScenarioAsync`'s one-shot "genuinely open"
+     resolution with the continuous engine's own internal tracking (they
+     independently agree today since both use the same underlying
+     sources/rule, but a deeper refactor collapsing them into one could be
+     revisited later without correctness pressure right now).
+
+   **Verified empirically** (per this project's established practice — see
+   §9.1's earlier "test using the real `App` class" lesson): ran the actual
+   compiled exe for 20+ seconds against this machine's real, populated
+   `.copilot` folder — stayed responsive, no unhandled-exception dialog (
+   confirmed via `EnumWindows`, not just "didn't visibly crash"). Separately,
+   a scratch harness constructing the real `TrayViewModel` with all 9 real
+   dependencies (temp `IAppStateStore` file, everything else pointed at the
+   real `.copilot` folder) confirmed: cycling to the live scenario still
+   shows correct real titles post-refactor (13 real sessions, including this
+   very session's own live title); toggling `IsMuted` round-trips correctly
+   through a *separate, freshly-constructed* `AppStateStore` instance reading
+   the same file back; and `StartMonitoring()` completes multiple real poll
+   ticks against real data with zero exceptions and no spurious notifications.
 6. **Phase 4 — Notifications**: toast on completion, unread badge, mark-as-read.
+   **Now substantially complete as of the Phase 3 entry above** — real toast
+   (`NotificationService`), real unread badge (`SessionChangeKind.Finished`
+   sets `IsUnread = true` on the matching visible row), mark-as-read was
+   already wired in an earlier pass. Remaining from this phase's original
+   scope: nothing essential; quiet hours/watch-list filtering remain
+   unimplemented pending a settings UI (see above).
 7. **Phase 5 — Settings & polish**: mute/quiet hours, watch-list filter,
    icon states, auto-start, single-instance guard. Distribution stays
    xcopy/zip (see §11) — auto-start is just a Startup-folder shortcut, no
-   installer involved.
+   installer involved. **Mute is now real** (see above); the rest is
+   unstarted.
 8. **Phase 6 — Stretch**: history/search view, usage/cost dashboard, toast
    actions.
 

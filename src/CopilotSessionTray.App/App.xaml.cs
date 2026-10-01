@@ -42,6 +42,13 @@ public partial class App : Application
         // user clicks the tray icon (see MainWindow.xaml.cs).
         _mainWindow = _serviceProvider.GetRequiredService<MainWindow>();
         _mainWindow.InitializeTrayIcon();
+
+        // Starts the continuous background monitor (§10 Phase 3) — real Started/WorkingStateChanged/
+        // Finished/Closed detection + notifications, running for the app's entire lifetime from
+        // here on regardless of what's currently displayed. Started only after the tray icon
+        // exists so NotificationService.AttachTrayIcon (called by InitializeTrayIcon above) has
+        // already run by the time the first poll could possibly emit a notification.
+        _serviceProvider.GetRequiredService<TrayViewModel>().StartMonitoring();
     }
 
     private static void ConfigureServices(IServiceCollection services)
@@ -55,6 +62,16 @@ public partial class App : Application
         services.AddSingleton<ISessionLauncher, SessionLauncher>();
         services.AddSingleton<IYoloTaskRunner, YoloTaskRunner>();
         services.AddSingleton<IAppStateStore, AppStateStore>();
+        services.AddSingleton<ISessionEventStreamReader, SessionEventStreamReader>();
+        services.AddSingleton<ISessionDetectionEngine, SessionDetectionEngine>();
+
+        // Registered as its own concrete singleton (not just behind INotificationService) so
+        // MainWindow can also depend on it directly to call AttachTrayIcon — a method deliberately
+        // kept off INotificationService itself since it's WPF/H.NotifyIcon-specific plumbing, not
+        // part of the reviewed Core-facing contract. TrayViewModel still only ever sees it as
+        // INotificationService, resolving to this exact same instance.
+        services.AddSingleton<Services.NotificationService>();
+        services.AddSingleton<INotificationService>(sp => sp.GetRequiredService<Services.NotificationService>());
 
         services.AddSingleton<TrayViewModel>();
         services.AddSingleton<MainWindow>();
