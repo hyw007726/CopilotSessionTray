@@ -1,77 +1,276 @@
 <svg
   xmlns="http://www.w3.org/2000/svg"
-  viewBox="0 0 64 64"
   width="64"
   height="64"
+  viewBox="0 0 64 64"
+  fill="none"
   role="img"
-  aria-labelledby="title desc"
+  aria-labelledby="meditating-title meditating-desc"
 >
-  <title id="title">Minimal multi-armed bodhisattva tray icon</title>
-  <desc id="desc">
-    A compact, solemn bodhisattva seated in lotus posture, with raised arms, prayer hands at the chest, and lower hands resting on the knees.
+  <title id="meditating-title">Guanyin — close-held meditation</title>
+  <desc id="meditating-desc">
+    A serene crowned Guanyin with a softly flared bell-shaped robe,
+    seated symmetrically on a lotus and framed by a pointed halo.
+    Six softly contoured outer arms make delicate orchid-finger
+    gestures, and two front arms join in prayer.
   </desc>
 
   <defs>
-    <mask id="gap" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
-      <rect width="64" height="64" fill="#fff" />
-      <g fill="none" stroke="#000" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M26.5 30C21.5 35 23 43 29.5 42.5" stroke-width="8.5" />
-        <path d="M37.5 30C42.5 35 41 43 34.5 42.5" stroke-width="8.5" />
-      </g>
+    <!-- Orchid-finger gesture -->
+    <path
+      id="guanyin-orchid-hand"
+      fill="currentColor"
+      fill-rule="evenodd"
+      d="
+        M-1.05.6
+        c-.1-1.3-1-2.2-1-3.6
+        0-1.3-.7-2.7-1.05-3.4
+        -.3-.6.4-1.1.8-.5
+        l.85 1.7
+        c-.15-1.2-.5-2.3-.65-2.8
+        -.2-.7.65-.9.95-.2
+        l.95 2.8
+        c0-1.4-.2-2.6-.2-3.3
+        0-.7.9-.8 1.05-.1
+        .35 1.4.55 2.8.45 3.9
+        .7-.6 1.65-.5 2.15.2
+        .6 1 .25 2.1-.45 2.8
+        L1.1.6Z
+
+        M1.05-4.1
+        c-.4.5-.35 1.2.05 1.55
+        .35.3.95-.05 1.2-.5
+        .3-.5.15-1.1-.3-1.25
+        -.35-.1-.7 0-.95.2Z
+      "
+    />
+
+    <!-- Three arms, mirrored below to form six -->
+    <g id="meditating-rear-arms" fill="currentColor">
+      <!-- Upper arm -->
       <path
-        d="M32 33C35 36 35 41 32 44C29 41 29 36 32 33Z"
-        fill="#000" stroke="#000" stroke-width="3"
+        d="
+          M27 27.1
+          c-2.3.1-4 1.5-6.5 2.1
+          -1.1.3-1.7-.1-2-1.1
+          -.5-1.4-.3-3-1-4.5
+          -.4-.9-.7-1.9-.8-2.7
+          l-2 .1
+          c.3 2 .1 4.4.8 6.7
+          .6 2.1 1.6 4.1 3.2 4.3
+          2.4.4 5.3-.4 8.7-1.8Z
+        "
       />
+      <use
+        href="#guanyin-orchid-hand"
+        transform="translate(15.8 21.2) scale(.86)"
+      />
+
+      <!-- Middle arm -->
+      <path
+        d="
+          M26 31.4
+          c-2.7.4-4.6 2.8-7.6 4.5
+          -1 .6-1.6.6-2.4 0
+          -1-.8-1.7-1.9-3-2.7
+          -1.1-.7-2.2-1.3-3.2-2.2
+          l-1.5 1.5
+          c1 1.2 2.4 2.1 3.6 3.4
+          1.2 1.3 2.5 2.9 4.2 3.1
+          1.6.4 4.1-1.3 5.6-2.2
+          1.8-1.1 3.4-1.4 5.3-2.3Z
+        "
+      />
+      <use
+        href="#guanyin-orchid-hand"
+        transform="translate(9 31.8) rotate(-44) scale(.79)"
+      />
+
+      <!-- Lower arm, held closer to the torso -->
+      <path
+        d="
+          M26 33.6
+          c-2.7.5-3.4 2.8-4.4 5.2
+          -.5 1.5-.9 3.3-1.9 3.4
+          -1 .1-1.7-.3-2.5-.5
+          l-.7 1.9
+          c1 .6 2.5 1.4 3.8 1.1
+          2.3-.5 2.9-3.5 4.1-5.7
+          .8-1.3 2.3-2 3.1-3.1Z
+        "
+      />
+      <use
+        href="#guanyin-orchid-hand"
+        transform="translate(17 42.5) rotate(-78) scale(.78)"
+      />
+    </g>
+
+    <!-- Shared prayer-arm contour -->
+    <path
+      id="guanyin-prayer-arm"
+      d="
+        M28.5 29.6
+        c-.5-.4-1-.3-1.4.3
+        -1.3 1.8-2.1 3.8-1.9 5.8
+        .2 2 1.2 3.2 2.7 3.1
+        1.8-.2 3.1-2 3.8-3.9
+        l-1.3-1.1
+        c-.8 1.3-1.5 2.3-2.2 2.4
+        -.5.1-.4-1.1-.1-2.1
+        l1.15-2.9
+        c.3-.7-.1-1.3-.75-1.6Z
+      "
+    />
+
+    <path
+      id="guanyin-joined-palms"
+      d="
+        M32 28.6
+        c-1.3 1.9-1.8 4.1-1.2 6.1
+        l1.2 1 1.2-1
+        c.6-2 .1-4.2-1.2-6.1Z
+      "
+    />
+
+    <!-- Transparent space around the prayer arms and robe fold -->
+    <mask
+      id="meditating-prayer"
+      x="0"
+      y="0"
+      width="64"
+      height="64"
+      maskUnits="userSpaceOnUse"
+      style="mask-type:luminance"
+    >
+      <path fill="#fff" d="M0 0h64v64H0z" />
+
+      <g
+        stroke="#000"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <g fill="#000" stroke-width="1.8">
+          <use href="#guanyin-prayer-arm" />
+          <use
+            href="#guanyin-prayer-arm"
+            transform="translate(64 0) scale(-1 1)"
+          />
+          <use href="#guanyin-joined-palms" />
+        </g>
+
+        <path
+          stroke-width="1.3"
+          d="M23 47.5C26 46.1 29 45.7 32 45.7s6 .4 9 1.8"
+        />
+      </g>
     </mask>
   </defs>
 
+  <!-- Pointed halo -->
+  <path
+    d="M22 25C16.3 17.1 21.7 8.3 32 2.5 42.3 8.3 47.7 17.1 42 25"
+    stroke="currentColor"
+    stroke-width="1.15"
+    stroke-linecap="round"
+  />
+
+  <!-- Six outer arms -->
+  <g mask="url(#meditating-prayer)">
+    <use href="#meditating-rear-arms" />
+    <use
+      href="#meditating-rear-arms"
+      transform="translate(64 0) scale(-1 1)"
+    />
+  </g>
+
   <g fill="currentColor">
-    <!-- Halo -->
+    <!-- Crown -->
     <path
-      fill-rule="evenodd"
-      d="M32 4a15 15 0 1 0 0 30 15 15 0 0 0 0-30Zm0 5a10 10 0 1 1 0 20 10 10 0 0 1 0-20Z"
-      opacity=".28"
+      d="
+        M28.8 10.5
+        c.2-1.9 1.4-3.4 3.2-4.5
+        1.8 1.1 3 2.6 3.2 4.5
+        -2.1-.5-4.3-.5-6.4 0Z
+      "
     />
 
-    <g mask="url(#gap)">
-      <!-- Upper and middle rear arms -->
-      <path d="M27 27c-5-1-8-5-12-9-1-1-3 1-2 3 4 6 8 10 14 12Z" />
-      <path d="M24 31c-6 0-10-1-15-3-2-1-3 2-1 3 5 4 10 6 16 6Z" />
-      <path d="M37 27c5-1 8-5 12-9 1-1 3 1 2 3-4 6-8 10-14 12Z" />
-      <path d="M40 31c6 0 10-1 15-3 2-1 3 2 1 3-5 4-10 6-16 6Z" />
+    <!-- Face -->
+    <path
+      d="
+        M32 11.7
+        c-3.2 0-4.6 2-4.2 5.2
+        .3 2.3 2.1 4.8 4.2 5.4
+        2.1-.6 3.9-3.1 4.2-5.4
+        .4-3.2-1-5.2-4.2-5.2Z
+      "
+    />
 
-      <!-- Lower arms down to the knees -->
-      <path d="M26 35c-6 1-10 5-11 10l-1 3c0 2 3 2 3.5 0l.5-2c1-3 4-6 8-7Z" />
-      <path d="M38 35c6 1 10 5 11 10l1 3c0 2-3 2-3.5 0l-.5-2c-1-3-4-6-8-7Z" />
+    <!-- Bell-shaped robe and seated legs -->
+    <path
+      mask="url(#meditating-prayer)"
+      d="
+        M30.2 22h3.6v1.3
+        c0 .9 1.3 1.2 2.4 1.7
+        2.7 1.2 3.2 3.5 3.5 6.8
+        .4 4.8 1.3 8.9 3.9 12.1
+        2.2.7 4.5 2.1 4.9 4.1
+        .5 2.7-3.1 3.9-7.2 3.9
+        H22.7
+        c-4.1 0-7.7-1.2-7.2-3.9
+        .4-2 2.7-3.4 4.9-4.1
+        2.6-3.2 3.5-7.3 3.9-12.1
+        .3-3.3.8-5.6 3.5-6.8
+        1.1-.5 2.4-.8 2.4-1.7Z
+      "
+    />
+  </g>
 
-      <!-- Hands resting on top of the knees -->
-      <ellipse cx="14.5" cy="49.5" rx="3.4" ry="2.4" transform="rotate(-15 14.5 49.5)" />
-      <ellipse cx="49.5" cy="49.5" rx="3.4" ry="2.4" transform="rotate(15 49.5 49.5)" />
+  <!-- Front prayer arms and joined palms -->
+  <g fill="currentColor">
+    <use href="#guanyin-prayer-arm" />
+    <use
+      href="#guanyin-prayer-arm"
+      transform="translate(64 0) scale(-1 1)"
+    />
+    <path
+      fill-rule="evenodd"
+      d="
+        M32 28.6
+        c-1.3 1.9-1.8 4.1-1.2 6.1
+        l1.2 1 1.2-1
+        c.6-2 .1-4.2-1.2-6.1Z
 
-      <!-- Head -->
-      <circle cx="32" cy="19" r="7" />
+        M31.8 30.7h.4v3.4h-.4Z
+      "
+    />
+  </g>
 
-      <!-- Torso -->
-      <path
-        d="M26 28c-3 5-4 10-3 16l2 8h14l2-8c1-6 0-11-3-16
-           c-2 3-4 4-6 4s-4-1-6-4Z"
-      />
-
-      <!-- Crossed legs: one wide, flat shape with rounded knees -->
-      <path
-        d="M7 54c0-4 4-6 8-5 6 2 12 4 17 4s11-2 17-4c4-1 8 1 8 5
-           c0 3-4 4-8 4H15c-4 0-8-1-8-4Z"
-      />
-
-      <!-- Pedestal -->
-      <path d="M12 60.5h40c1 0 1.5.6 1.5 1.5s-.5 1.5-1.5 1.5H12c-1 0-1.5-.6-1.5-1.5s.5-1.5 1.5-1.5Z" />
-    </g>
-
-    <!-- Front arms in anjali mudra -->
-    <g fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M26.5 30C21.5 35 23 43 29.5 42.5" />
-      <path d="M37.5 30C42.5 35 41 43 34.5 42.5" />
-    </g>
-    <path d="M32 33C35 36 35 41 32 44C29 41 29 36 32 33Z" />
+  <!-- Lotus seat -->
+  <g fill="currentColor">
+    <path
+      d="
+        M22.8 54
+        c3.1.3 6.1.5 9.2.5
+        s6.1-.2 9.2-.5
+        c-2 3-5.1 5.1-9.2 6.3
+        -4.1-1.2-7.2-3.3-9.2-6.3Z
+      "
+    />
+    <path
+      d="
+        M11.5 53.6
+        c4.5-.6 7.7.1 10.9 1.9
+        1.5 1.7 3.1 3.1 5.2 4.3
+        -7 .2-12.3-1.9-16.1-6.2Z
+      "
+    />
+    <path
+      d="
+        M52.5 53.6
+        c-4.5-.6-7.7.1-10.9 1.9
+        -1.5 1.7-3.1 3.1-5.2 4.3
+        7 .2 12.3-1.9 16.1-6.2Z
+      "
+    />
   </g>
 </svg>
