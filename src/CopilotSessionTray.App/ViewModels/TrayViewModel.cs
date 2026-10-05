@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -196,23 +197,41 @@ public sealed partial class TrayViewModel : ObservableObject
     public bool IsAnyWorking => Sessions.Any(s => s.Status == SessionStatus.Working);
 
     /// <summary>
+    /// Whether at least one open session is in the <see cref="SessionStatus.WaitingForInput"/>
+    /// per-session status. Not currently used to drive any tray-icon/priority treatment — see
+    /// <see cref="TrayAggregateState.WaitingForInput"/>'s doc comment for why (kept as a stub for
+    /// a future real implementation, IMPLEMENTATION_PLAN.md §9.6 follow-up). Kept as its own
+    /// property regardless, since it's still a reasonable thing for other code to ask.
+    /// </summary>
+    public bool IsAnyWaitingForInput => Sessions.Any(s => s.Status == SessionStatus.WaitingForInput);
+
+    /// <summary>
     /// Tray icon font size, compensated for system DPI scaling. H.NotifyIcon's
     /// <c>GeneratedIconSource</c> scales its <c>Size</c>/<c>TextMargin</c> by the current DPI
     /// internally, but does <em>not</em> scale <c>FontSize</c> — so a hardcoded FontSize looks
     /// right only at 100% scaling and drifts out of the centered TextMargin box at 125%/150%/etc.
     /// (very common on modern displays). Scaling it here ourselves keeps it proportionate.
     /// </summary>
+    /// <remarks>
+    /// <b>Reverted 2026-10-02</b> (26 back to 44; see IMPLEMENTATION_PLAN.md §9.5) alongside
+    /// reverting <see cref="IconBrush"/>/<see cref="IconTextMargin"/>'s badge-box targeting
+    /// entirely — see <see cref="IconBrush"/>'s own doc comment for why.
+    /// </remarks>
     public double IconFontSize => 44.0 * (NativeMethods.GetDpiForSystem() / 96.0);
 
     /// <summary>
-    /// Tray icon text margin, computed to precisely center whatever <see cref="IconGlyph"/> is
-    /// currently showing. GeneratedIconSource always draws via a fixed rectangle (from
+    /// Tray icon text margin. GeneratedIconSource always draws via a fixed rectangle (from
     /// TextMargin) using GDI+'s tight "GenericTypographic" metrics anchored top-left rather than
-    /// centered, so a single static margin can't perfectly center every glyph — a narrow glyph
-    /// like "1" sits further left/up than a wider one like "9+" at the exact same margin. This
+    /// centered, so a single static margin can't position any glyph correctly on its own — this
     /// measures the actual glyph with the same GDI+ APIs/format the library draws with
-    /// internally, then computes the margin needed to center that specific measured size.
+    /// internally, then computes the margin needed to center that specific measured size inside
+    /// the target box.
     /// </summary>
+    /// <remarks>
+    /// <b>Reverted 2026-10-02</b> back to plain full-canvas centering (briefly a small
+    /// badge-box in the corner — see IMPLEMENTATION_PLAN.md §9.4/§9.5) — moot now that the
+    /// image background was reverted entirely; see <see cref="IconBrush"/>'s doc comment for why.
+    /// </remarks>
     public Thickness IconTextMargin
     {
         get
@@ -252,17 +271,118 @@ public sealed partial class TrayViewModel : ObservableObject
                 : string.Empty; // idle / no sessions — nothing to report
 
     /// <summary>
-    /// Tray icon background: green whenever anything is actively working — that takes priority
-    /// over the unread accent, since "something's happening right now" is the more immediate
-    /// signal — falling back to an accent for unread-but-idle, then neutral gray for nothing.
-    /// The unread count is still surfaced via the <see cref="IconGlyph"/> number regardless of
-    /// which color is showing, so it's never hidden just because something is also working.
+    /// Tray icon background — a single switch over <see cref="AggregateState"/> (2026-10-05,
+    /// IMPLEMENTATION_PLAN.md §9.6; previously independently reimplemented
+    /// <see cref="IsAnyWorking"/>/<see cref="UnreadCount"/> checks here, with
+    /// <see cref="AggregateState"/> computed-but-unused elsewhere). Priority (highest wins, see
+    /// <see cref="TrayAggregateState"/>'s own doc comment): <see cref="TrayAggregateState.AttentionNeeded"/>
+    /// (unread) is orange > <see cref="TrayAggregateState.Working"/> is green > idle/empty/
+    /// <see cref="TrayAggregateState.WaitingForInput"/> uses the gold glyph image instead of a flat
+    /// fill (see <see cref="IconBackgroundSource"/>) — this brush is <c>Transparent</c> in that
+    /// case so no flat color shows behind/around it. The unread count is still surfaced via
+    /// <see cref="IconGlyph"/> regardless of which background is showing, so it's never hidden
+    /// just because something else also ranks higher.
     /// </summary>
-    public Brush IconBrush => IsAnyWorking
-        ? Brushes.MediumSeaGreen
-        : UnreadCount > 0
-            ? Brushes.OrangeRed
-            : Brushes.Gray;
+    /// <remarks>
+    /// <para>
+    /// <b><see cref="TrayAggregateState.WaitingForInput"/> intentionally renders identically to
+    /// idle (gray/gold), not a distinct color — "not implemented", not "demoted"</b> (2026-10-05
+    /// follow-up to the paragraph below): a real screenshot of genuinely-idle sessions (one 5+
+    /// hours old, one 1+ day old) exposed that Copilot CLI's <c>working</c> flag — the only
+    /// signal <see cref="SessionStatus.WaitingForInput"/> is derived from — cannot actually
+    /// distinguish "paused mid-conversation, expects a reply soon" from "fully done, abandoned
+    /// a while ago"; both report <c>working: false</c> identically (IMPLEMENTATION_PLAN.md §2.3).
+    /// Treating that case as a confident, elevated "this needs you" signal (as a brief earlier
+    /// attempt did — flashing gold, outranking <c>Working</c>) was simply wrong: we don't have
+    /// the information to back that claim. Rather than deleting the concept outright, the
+    /// enum value/switch arm are deliberately kept as a <em>stub</em> — real UI/priority
+    /// treatment can be reinstated here the moment Copilot CLI exposes a genuine distinguishing
+    /// signal (e.g. a real "awaiting reply" flag, or a specific terminal <c>events.jsonl</c>
+    /// event type), without having to redesign where it plugs in.
+    /// </para>
+    /// <para>
+    /// <b>An image background is safe again as of today's later <c>IconSource</c>-removal fix</b>
+    /// (IMPLEMENTATION_PLAN.md §9.6, superseding the reasoning that used to be written here): the
+    /// risk this paragraph used to describe — every <c>GeneratedIconSource</c> dependency-property
+    /// change independently firing an un-awaited, fire-and-forget <c>ToIconAsync</c> regeneration
+    /// — only existed because <c>TaskbarIcon.IconSource</c> was bound to this source and reacted
+    /// to its own internal change events. That whole reactive pipeline is gone;
+    /// <c>MainWindow.xaml.cs</c>'s <c>UpdateTrayIcon()</c> now sets every property here and calls
+    /// the *synchronous* <c>ToIcon()</c> itself, exactly once per real view-model change, so
+    /// nothing about using <see cref="IconBackgroundSource"/> reintroduces the old race.
+    /// </para>
+    /// </remarks>
+    public Brush IconBrush => AggregateState switch
+    {
+        TrayAggregateState.AttentionNeeded => Brushes.OrangeRed,
+        TrayAggregateState.Working => Brushes.MediumSeaGreen,
+        // Idle/NoSessions/WaitingForInput (stub) all use the gold glyph image instead of a flat
+        // fill — see IconBackgroundSource — so the backdrop itself is transparent here.
+        _ => Brushes.Transparent,
+    };
+
+    /// <summary>
+    /// Tray icon image background for every state <see cref="IconBrush"/> leaves
+    /// <c>Transparent</c> (idle/empty/<see cref="TrayAggregateState.WaitingForInput"/>) — the same
+    /// gold bodhisattva glyph used for <see cref="SessionItemViewModel.StatusIconSource"/>'s "Idle"
+    /// row icon (2026-10-05, user request: "make the gray tray icon into the golden glyph, the
+    /// gray dot does not look good"). <c>null</c> for <see cref="TrayAggregateState.AttentionNeeded"/>/
+    /// <see cref="TrayAggregateState.Working"/>, where the flat color + unread-count/working-dot
+    /// glyph from <see cref="IconGlyph"/> is still what actually needs to be legible at tray-icon
+    /// size — <c>null</c> clears any previously-set image so those states don't keep showing a
+    /// stale one underneath their own flat color.
+    /// </summary>
+    public ImageSource? IconBackgroundSource => AggregateState switch
+    {
+        TrayAggregateState.AttentionNeeded or TrayAggregateState.Working => null,
+        _ => WaitingForInputWatermarkImage,
+    };
+
+    /// <summary>
+    /// The popup's background watermark art, color-matched to the live tray icon's current
+    /// state (2026-10-02/05, see IMPLEMENTATION_PLAN.md §9.5/§9.6) — same switch over
+    /// <see cref="AggregateState"/> as <see cref="IconBrush"/>, just applied to a plain WPF
+    /// <c>Image.Source</c> binding in <c>MainWindow.xaml</c> rather than anything touching
+    /// <c>H.NotifyIcon</c>/<c>GeneratedIconSource</c>. This is deliberately a completely different
+    /// code path from the tray icon's own rendering: a plain
+    /// <see cref="System.Windows.Controls.Image"/> swapping a pre-loaded, <c>Freeze()</c>-d
+    /// <see cref="BitmapImage"/> is standard, synchronous WPF image binding with no GDI+ interop
+    /// and no async regeneration involved at all — so none of the concurrency risk documented on
+    /// <see cref="IconBrush"/> applies here, however often this property changes.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="TrayAggregateState.WaitingForInput"/> deliberately maps to the same gray/idle
+    /// watermark as everything else that isn't <c>Working</c>/<c>AttentionNeeded</c> — same
+    /// "stub, not deleted" reasoning as <see cref="IconBrush"/>'s own remarks.
+    /// <see cref="WaitingForInputWatermarkImage"/> itself is kept loaded (not removed) purely so
+    /// re-enabling this later is a one-line change here, not a re-bake of the art.
+    /// </remarks>
+    public ImageSource WatermarkImageSource => AggregateState switch
+    {
+        TrayAggregateState.AttentionNeeded => UnreadWatermarkImage,
+        TrayAggregateState.Working => WorkingWatermarkImage,
+        _ => IdleWatermarkImage,
+    };
+
+    private static readonly ImageSource WorkingWatermarkImage = LoadWatermarkImage("TrayIcon.Watermark.Working.png");
+    private static readonly ImageSource UnreadWatermarkImage = LoadWatermarkImage("TrayIcon.Watermark.Unread.png");
+    private static readonly ImageSource IdleWatermarkImage = LoadWatermarkImage("TrayIcon.Watermark.Idle.png");
+
+    /// <summary>
+    /// Not currently selected by <see cref="WatermarkImageSource"/> (the big popup watermark) —
+    /// kept loaded, ready for reuse there once <see cref="TrayAggregateState.WaitingForInput"/>
+    /// has a real implementation (see that property's remarks). It's already reused for a
+    /// different surface, though: <see cref="IconBackgroundSource"/> (the tray icon itself) uses
+    /// this exact same gold bitmap today (2026-10-05, user request).
+    /// </summary>
+    private static readonly ImageSource WaitingForInputWatermarkImage = LoadWatermarkImage("TrayIcon.Watermark.WaitingForInput.png");
+
+    private static ImageSource LoadWatermarkImage(string fileName)
+    {
+        var image = new BitmapImage(new Uri($"pack://application:,,,/Assets/{fileName}"));
+        image.Freeze(); // immutable + safe to share across threads, same as any static resource.
+        return image;
+    }
 
     /// <summary>Subtitle shown under the popup's title — makes it obvious at a glance whether <see cref="Sessions"/> is fake demo data or a real live read.</summary>
     public string HeaderSubtitleText => IsShowingLiveData
@@ -987,10 +1107,10 @@ public sealed partial class TrayViewModel : ObservableObject
                     workingDirectory: @"C:\Git\CopilotSessionTray"));
                 break;
 
-            case 1: // Everything idle.
+            case 1: // Idle (WaitingForInput status — not confidently colorized, see IconBrush's remarks).
                 Sessions.Add(new SessionItemViewModel(
                     "demo-4", "acme/billing-service", SessionStatus.WaitingForInput,
-                    "Waiting on next instruction.", TimeSpan.FromMinutes(9), isUnread: false));
+                    "Deployed the hotfix; smoke tests passed.", TimeSpan.FromMinutes(9), isUnread: false));
                 break;
 
             case 2: // Needs attention — multiple unread.
@@ -1188,25 +1308,45 @@ public sealed partial class TrayViewModel : ObservableObject
 
     private void RecomputeAggregateState()
     {
-        // IconGlyph/IconBrush/IconTextMargin/ToolTipText depend on UnreadCount/IsAnyWorking (and
-        // Sessions.Count) directly, not just on AggregateState, so they're notified explicitly
-        // here rather than relying on AggregateState's [NotifyPropertyChangedFor] — which
-        // wouldn't fire if the enum value happens to stay the same while those still changed.
-        OnPropertyChanged(nameof(UnreadCount));
-        OnPropertyChanged(nameof(IsAnyWorking));
-        OnPropertyChanged(nameof(IconGlyph));
-        OnPropertyChanged(nameof(IconBrush));
-        OnPropertyChanged(nameof(IconTextMargin));
-        OnPropertyChanged(nameof(ToolTipText));
         EmptyStateVisibility = Sessions.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
+        // Priority order (highest wins) — see TrayAggregateState's own doc comment.
+        // AttentionNeeded (unread — an *observed* transition, genuinely fresh news) outranks
+        // Working, reversed from the original design where Working always won.
+        // TrayAggregateState.WaitingForInput is deliberately never assigned here (2026-10-05,
+        // see IconBrush's remarks) — kept as a stub enum value for a future real implementation,
+        // not computed today, so sessions in that per-session status simply fall through to Idle.
         AggregateState = Sessions.Count == 0
             ? TrayAggregateState.NoSessions
             : Sessions.Any(s => s.IsUnread)
                 ? TrayAggregateState.AttentionNeeded
-                : Sessions.Any(s => s.Status == SessionStatus.Working)
+                : IsAnyWorking
                     ? TrayAggregateState.Working
                     : TrayAggregateState.Idle;
+
+        // IconGlyph/IconBrush/WatermarkImageSource/IconTextMargin/ToolTipText depend on
+        // UnreadCount/IsAnyWorking/IsAnyWaitingForInput (and Sessions.Count) directly, not just on
+        // AggregateState, so they're notified explicitly here rather than relying on
+        // AggregateState's [NotifyPropertyChangedFor] — which wouldn't fire if the enum value
+        // happens to stay the same while those still changed.
+        //
+        // Raised AFTER AggregateState is assigned above — not before (2026-10-05 fix, see
+        // IMPLEMENTATION_PLAN.md): these used to be raised first, which meant any subscriber that
+        // reads e.g. IconBrush synchronously *while handling* this notification (a WPF binding, or
+        // MainWindow's own direct tray-icon update) would read IconBrush's getter before
+        // AggregateState had actually been updated to its new value — observing the previous
+        // state, one step stale, every single time. Confirmed via a real reproduction (not just
+        // reasoning): 7 of 8 rapid demo-cycle notifications showed a stale AggregateState at the
+        // moment of this very notification before this reorder; 0 of 8 after it.
+        OnPropertyChanged(nameof(UnreadCount));
+        OnPropertyChanged(nameof(IsAnyWorking));
+        OnPropertyChanged(nameof(IsAnyWaitingForInput));
+        OnPropertyChanged(nameof(IconGlyph));
+        OnPropertyChanged(nameof(IconBrush));
+        OnPropertyChanged(nameof(IconBackgroundSource));
+        OnPropertyChanged(nameof(WatermarkImageSource));
+        OnPropertyChanged(nameof(IconTextMargin));
+        OnPropertyChanged(nameof(ToolTipText));
     }
 
     private static class NativeMethods

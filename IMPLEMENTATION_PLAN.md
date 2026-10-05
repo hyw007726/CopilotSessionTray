@@ -407,9 +407,10 @@ separately — see §9.2.
 - Two narrower, lower-priority notes, still just notes: a logical
   (non-crashing) race is possible if an async session-loading command and a
   synchronous one interleave mid-`await` on the UI thread; and
-  `AppStateStore`'s in-process `SemaphoreSlim` doesn't protect
-  `app-state.json` against two *process* instances writing at once,
-  relevant only once §5 item 9's single-instance guard is being designed.
+  `AppStateStore`'s in-process `SemaphoreSlim` doesn't itself protect
+  `app-state.json` against two *process* instances writing at once — now
+  moot in practice now that `App`'s single-instance `Mutex` (§9.3 follow-up)
+  prevents a second process from ever getting far enough to try.
 
 ### 9.2 Bug fix (2026-10-01): "Resume with Summary" seeded a nonsense prompt
 
@@ -615,6 +616,683 @@ cycle mechanism is completely undisturbed. All 69 tests still pass. The
 real compiled app was stopped, rebuilt, and relaunched with this change —
 confirmed responsive afterward.
 
+### 9.3 Feature (2026-10-01): startup reliability — auto-launch with crash-recovery
+
+**Requested by the user**: make sure the app is always running, and launch
+it at Windows startup.
+
+**Gap found**: a run-at-startup toggle already existed (§10 Phase 1), but
+it only ever wrote a plain per-user Registry Run-key entry — which fires
+once at logon and provides no recovery if the app later crashes mid-session.
+
+**Fix**: `Services/StartupRegistration.cs` (`IsEnabled()`/`SetEnabled(bool)`
+— same public surface, no caller changes needed in `TrayViewModel`) now
+registers/removes a per-user **Scheduled Task** instead, built via an XML
+task definition imported through `schtasks.exe /Create /XML` (consistent
+with this app's existing pattern — see `CopilotTerminalLauncher` — of
+shelling out to a built-in Windows executable rather than adding a Task
+Scheduler NuGet dependency or raw COM interop). Key settings:
+`LogonTrigger` (this user's own logon only) + `LogonType=InteractiveToken`/
+`RunLevel=LeastPrivilege` (interactive desktop session, the WPF tray icon's
+hard requirement — but still no admin elevation); `ExecutionTimeLimit=PT0S`
+(no time limit — Task Scheduler's own default, commonly 72 hours, would
+otherwise forcibly kill this intentionally-long-running tray app);
+`RestartOnFailure` (1-minute interval, up to 999 times) — the actual
+crash-recovery behavior this revision exists for, since Task Scheduler
+only restarts on a non-zero/crash exit code and correctly leaves an
+intentional "Quit" (clean exit, code 0) alone; `MultipleInstancesPolicy=
+IgnoreNew` as a side-benefit (prevents Task Scheduler itself from
+double-launching this one task at logon) — explicitly **not** a full fix
+for the still-open single-instance-guard gap (§9.1), since it can't stop a
+manually-started second copy running alongside it.
+
+**Verified**: test-registered a throwaway task via the real XML shape and
+confirmed empirically (`Get-ScheduledTask`) that `RestartCount`/
+`RestartInterval`/`ExecutionTimeLimit`/`LogonType`/`RunLevel` all import
+exactly as specified, and that registration succeeds under this user's own
+standard (non-admin) token. Then reflectively invoked the actual shipped
+`StartupRegistration.BuildTaskXml`/`SetEnabled`/`IsEnabled` methods (not a
+reimplementation) against the real compiled `CopilotSessionTray.App.dll` —
+confirming `IsEnabled()` correctly flips `false → true` after `SetEnabled(true)`
+and the registered task's `Execute` path matches the real app exe exactly
+(caught and corrected one harness mistake along the way: invoking
+`SetEnabled` from a PowerShell host process captures *that* process's own
+path via `Environment.ProcessPath`, not the target app's — resolved by
+invoking `BuildTaskXml` directly with the real exe path instead, which is
+also exactly what happens for real when the *actual* running app calls
+`SetEnabled` on itself). Solution rebuilds clean (0 warnings/errors); all
+69 existing tests still pass (this change is entirely new App-layer code
+with no dedicated tests yet — consistent with the rest of the App project,
+see §9.1). Real compiled app stopped, rebuilt, and relaunched — confirmed
+responsive, and the Scheduled Task now correctly targets its exe path.
+
+#### Follow-up (same day): single-instance guard, closing the gap this section itself flagged
+
+`MultipleInstancesPolicy=IgnoreNew` above only stops the Scheduled Task
+from double-launching at logon — it does nothing about a manually-started
+second copy. Closed properly with a `System.Threading.Mutex`
+(`"CopilotSessionTray-SingleInstance-Mutex"`, no `Global\` prefix needed
+for a single-user tool) acquired first thing in `App.OnStartup`, before any
+other startup work: if this process didn't create it (`createdNew ==
+false`), it shows a plain "already running" `MessageBox` and calls
+`Shutdown()` immediately, leaving the original instance completely
+untouched. `OnExit` only calls `ReleaseMutex()` when this instance actually
+owns it (`_isPrimaryInstance`) — the duplicate's own early-exit path also
+flows through `OnExit` holding a handle to the same named mutex, but never
+owned it, so unconditionally releasing would throw
+`SynchronizationLockException`.
+
+**Verified**: launched a real primary instance, then a real second one
+alongside it — confirmed the second showed the expected "Copilot Session
+Tray" dialog (via `MainWindowTitle`) while the first stayed fully
+responsive and untouched throughout (same PID, same start time); closing
+the dialog made the duplicate process exit cleanly with no effect on the
+original. Solution rebuilds clean; all 69 tests still pass.
+
+### 9.4 Feature (2026-10-02): real artwork for the tray icon, replacing the flat color square
+
+**Requested by the user**, who supplied original SVG art: a minimal,
+multi-armed bodhisattva seated in lotus posture — along with the question
+of whether SVG was even the right format to provide.
+
+**Answered first, then implemented the recommended path**: SVG is the
+right *source* format, but Win32 tray icons are raster, and `TaskbarIcon`'s
+`GeneratedIconSource` (the control already in use — see §10 Phase 1) draws
+everything itself via GDI+, with no SVG support at all. Investigated the
+control's actual rendering code directly
+(`GeneratedIconSource.System.Drawing.cs`/`SystemDrawingIconGenerator.Generate`,
+fetched from the real H.NotifyIcon source, not assumed) before writing any
+code: confirmed `BackgroundSource` (an `ImageSource`, previously unused in
+this app) supplies the base bitmap, but the control still fills its own
+`Background` shape **on top of** that image afterwards — so simply setting
+both would hide the artwork under the existing flat-color fill. Fixed by
+setting `Background="Transparent"` in `MainWindow.xaml` and binding the new
+`BackgroundSource` to a new `TrayViewModel.IconBackgroundImageSource`.
+
+**Asset pipeline**: `cairosvg` (the obvious Python choice) turned out to
+need a native `libcairo` binary not present on Windows and not pip-
+installable there — rather than fight that, switched to `SkiaSharp`/
+`Svg.Skia` (a throwaway console tool, not a shipped dependency — Core/App
+still reference nothing new). Three PNGs are pre-baked from the original
+SVG (kept at `Assets/tray-icon-source.svg` for provenance, excluded from
+the build), one per existing state color (`TrayIcon.{Working,Unread,Idle}.png`
+— `#3CB371`/`#FF4500`/`#808080`, exactly `IconBrush`'s old colors, now
+retired): `currentColor` swapped to white, rendered via `SKSvg`, composited
+onto an anti-aliased solid-color circle. Loaded once into static,
+`Freeze()`-d `BitmapImage` fields (bundled app resources, never changing at
+runtime) via `pack://application:,,,/Assets/...` URIs; `.csproj` gained an
+explicit `<Resource Include="Assets\TrayIcon.*.png">` (the `.svg` source is
+deliberately not globbed in).
+
+**The live unread-count/dot badge needed rework, not just a recolor**:
+first attempt kept the existing dead-center text positioning and only
+tried nudging it to a plain top-right corner. Rendering the *real* control
+(`GeneratedIconSource.ToBitmap()`, via a throwaway WPF console harness
+referencing the same H.NotifyIcon package — not a mockup) and visually
+inspecting the output showed the bodhisattva's own outstretched arms reach
+much further into the icon's corners than expected, directly colliding
+with the badge text. Fixed properly, matching the universal "notification
+count" convention (Android/Teams/Slack-style): baked a small, fixed, solid
+circle backdrop (`#D32F2F`, a fixed accent independent of state color) into
+the bottom-right corner of the Working/Unread PNGs only — confirmed
+`IconGlyph` is *only* ever empty when the background is Idle/gray, so Idle
+never needs one. `IconFontSize`'s base size dropped from 44 to 26 (44 was
+sized for the old full-icon centering, too large for the small backdrop),
+and `IconTextMargin` now centers the measured glyph inside that backdrop
+circle's exact baked box instead of the whole canvas — the two had to be
+kept in sync by hand (documented in both places) since nothing enforces
+that automatically.
+
+**Verified**: solution rebuilds clean (0 warnings/errors); all 69 existing
+tests still pass (this change touches only App-layer code and bundled
+assets, no `Core` changes). Visual correctness was checked by rendering
+the actual shipped `GeneratedIconSource` control (not a reimplementation)
+for all 3 background states crossed with representative glyphs (none,
+"●", "3", "9+") and inspecting the output images directly — caught and
+fixed the arm-collision problem this way before it ever reached the real
+app. Separately downsampled the final art to real tray sizes (16/20/24/32px)
+to confirm the figure and state color stay legible that small; confirmed
+the exact unread count is never actually lost even where digits blur at
+16px, since `ToolTipText` already surfaces it on hover regardless. Real
+compiled app stopped, rebuilt, and relaunched — confirmed responsive with
+no visible error dialogs (`EnumWindows`-checked, not just "didn't crash").
+
+#### Follow-up (same day): the same artwork as a faint watermark in the popup
+
+**Requested by the user** (with a screenshot of the popup's empty state):
+add the same SVG as a semi-transparent gray background, "just to increase
+the perception of the logo."
+
+**Implemented**: a 4th baked asset, `TrayIcon.Watermark.png` — the glyph
+alone (no circle/badge), recolored gray (`#808080`, matching the Idle tray
+color), transparent surroundings. Added to `MainWindow.xaml` as a plain
+`Image` (`Opacity="0.08"`, `220x220`, centered, `IsHitTestVisible="False"`)
+declared *before* (so behind, in z-order) the `ListBox`/empty-state
+`TextBlock`, both of which already keep a transparent background — so it
+shows through both the big empty state and, more faintly, behind real
+session rows.
+
+**Verified visually, not just "it builds"**: rendering a full `MainWindow`
+needed its own small fixes, each confirming something real rather than
+assumed. (1) `Window.Measure()` throws a WPF internal invariant failure
+without a real native HWND — worked around by rendering `window.Content`
+(the root `Grid`, a plain `FrameworkElement`) directly instead, which
+needs no HWND. (2) A bare console harness never registers the `pack://`
+URI scheme the way a real `Application` does as a side effect of its own
+static init — `TrayViewModel.LoadIconImage`'s pack URIs threw
+`UriFormatException` until the harness constructed a (never-`Run()`)
+`System.Windows.Application` first. (3) `pack://application:,,,/` resolves
+against the *entry assembly* — correctly `CopilotSessionTray.App.exe`
+itself in the real app (already proven working), but the harness's own
+`.exe` in this throwaway project, so it needed its own local copy of the
+same `Assets/*.png` files purely to resolve identically; no real app code
+changed for this. With all three resolved, rendered the actual
+`TrayViewModel`/`MainWindow` (cycling, with the real
+`CycleDemoScenarioCommand`, to demo scenario 3 — the genuine "Empty" case,
+matching the user's screenshot exactly) to a PNG via
+`RenderTargetBitmap` and inspected it directly: confirmed the watermark
+reads clearly as the bodhisattva figure, sits centered behind "No sessions
+(demo)" without competing with it, and — checked separately on scenario 0
+— stays unobtrusive behind real populated rows too, mostly hidden but
+peeking through faintly where rows don't fully cover it. Solution rebuilds
+clean; all 69 tests still pass (App-layer/asset-only change, no `Core`
+changes). Real compiled app stopped, rebuilt, and relaunched — confirmed
+responsive.
+
+**Same-day micro-follow-up**: the user asked to "bring it up a little"
+after seeing it live (screenshot showed the figure sitting low, pedestal
+close to the footer buttons). Nudged with `Margin="0,0,0,40"` alongside
+the existing `VerticalAlignment="Center"` — an asymmetric bottom-only
+margin shrinks the centering box from the bottom edge only, pulling the
+visual center upward by half the margin, a cleaner idiom than a negative
+top margin. Re-rendered the same way (real `MainWindow`, scenario 3) to
+confirm the new position before touching the live app; same verification,
+same result (69 tests, clean rebuild, responsive restart).
+
+### 9.5 Real crash (2026-10-02): §9.4's tray-icon artwork had to be reverted
+
+**Reported by the user**, with a screenshot: "it crashed and I can't shut
+down, it keeps popping up these" — a stack of repeated "Copilot Session
+Tray — unexpected error" dialogs, the front one showing a
+`System.OutOfMemoryException` deep in WPF's own composition engine
+(`DUCE.Channel.SyncFlush`/`HwndTarget.UpdateWindowSettings`), a second
+dialog behind it showing fragments of a different exception mentioning
+`H.NotifyIcon`/`imageSource`/`cancellation`.
+
+**Root cause, found via Windows Event Viewer, not guessed at**: an
+`Application`-log `.NET Runtime` entry (from 2026-09-29 — the day the
+background monitor first shipped, i.e. a pre-existing risk, not something
+§9.4 introduced from nothing) captured the exact second dialog's exception
+in full:
+```
+System.Runtime.InteropServices.ExternalException (0x80004005): A generic error occurred in GDI+.
+   at H.NotifyIcon.GeneratedIconSource.ToIconAsync(CancellationToken cancellationToken)
+   at H.NotifyIcon.ImageExtensions.ToIconAsync(ImageSource imageSource, CancellationToken cancellationToken)
+   at H.NotifyIcon.TaskbarIcon.<>c__DisplayClass178_0.<<OnIconSourceChanged>g__OnGeneratedIconSourceOnDependencyPropertyChanged|0>d.MoveNext()
+```
+Cross-referenced against `GeneratedIconSource`'s own real source
+(`GeneratedIconSource.cs`): its `Refresh()` method is
+`OnChanged(); _ = OnDependencyPropertyChanged();` — an explicitly
+un-awaited, fire-and-forget async call. `TaskbarIcon` runs this for
+*every single* `GeneratedIconSource` dependency-property change
+independently. §9.4's `RecomputeAggregateState()` changes `Text`,
+`TextMargin`, and (newly, in §9.4) `BackgroundSource` together on every
+real state transition — three near-simultaneous, unawaited async icon
+regenerations, each touching the same non-thread-safe GDI+ `Bitmap`/
+`Graphics` objects with no synchronization between them. "A generic error
+in GDI+" is the textbook symptom of exactly that kind of concurrent
+access. This race has apparently always existed (confirmed from a log
+entry predating today), but a flat `SolidColorBrush` fill completes near-
+instantly, keeping the overlap window too narrow to matter in practice;
+`BackgroundSource`'s extra bitmap-decode work (introduced in §9.4) widened
+that window enough to hit it reliably within minutes of continuous 3-
+second polling — turning a dormant, theoretical risk into a real,
+user-facing crash loop. Separately, `DispatcherUnhandledException`
+(added 2026-09-29 specifically so failures are visible instead of silent)
+turned out to make this *specific* failure mode worse, not better: each
+recurrence is "handled" and the process survives, so the same underlying
+problem fires again moments later, popping up another dialog faster than
+a user can dismiss them — explaining "I can't shut down" precisely (the
+process never actually exits; Task Manager / `Stop-Process -Force` was
+needed).
+
+**Fix, two parts**:
+1. **Reverted §9.4's `BackgroundSource` entirely** — `TrayViewModel.IconBrush`
+   is back to a flat `SolidColorBrush` (exactly as before §9.4), and
+   `IconFontSize`/`IconTextMargin` are back to their original full-canvas
+   centering. This removes the specific trigger that turned a rare race
+   into a frequent one. The artwork itself isn't lost: it now lives only
+   in the popup's watermark (§9.4), which is a plain WPF `Image.Source`
+   binding — no `H.NotifyIcon`/`GeneratedIconSource` involvement at all, so
+   none of this risk applies there, however often it's rebound.
+2. **`App.OnDispatcherUnhandledException` now rate-limits itself**: more
+   than `MaxConsecutiveExceptionDialogs` (3) dialogs within a tight
+   recurrence window (5s) stops showing any more and lets the process
+   terminate for real instead of suppressing-and-repeating forever.
+   Deliberately not a graceful `Shutdown()` for that final case — whatever
+   caused a tight failure loop may have already left the dispatcher/UI in
+   a bad state, so finishing via the normal unhandled-exception path is
+   safer than risking another broken cycle. This is a structural
+   safety net independent of today's specific bug: *any* future recurring
+   failure, whatever its cause, can no longer trap the user in an
+   unstoppable dialog storm.
+
+**Also addressed in the same pass**: the user's separate ask — color the
+popup watermark to match the tray icon's current state color — implemented
+via 3 new baked variants (`TrayIcon.Watermark.{Working,Unread,Idle}.png`,
+green/orange/gray, figure only, no circle/badge) and a new
+`TrayViewModel.WatermarkImageSource` selecting between them with the same
+state priority as `IconBrush`. Confirmed deliberately safe to make this
+live/reactive (unlike the tray icon): it's the same plain `Image.Source`
+binding path as before, untouched by the bug above.
+
+**Verified**: immediately killed the running process and disabled the
+Scheduled Task (so `RestartOnFailure` couldn't relaunch it mid-
+investigation) before diagnosing. After the fix, ran a real 5-minute soak
+test against the actual compiled app (not a short smoke test like
+previous verifications) — sampling memory/handle count every 30 seconds
+through ~100 real 3-second poll ticks: memory stayed flat (210–214MB, no
+growth trend) and handles *decreased* slightly (567→555) rather than
+climbing, `Responding` stayed `True` throughout, zero visible windows
+(`EnumWindows`-checked — no error dialogs), and zero new `.NET Runtime`
+crash events logged for the entire window. Re-enabled the Scheduled Task
+only after this passed. All 69 tests still pass; solution rebuilds clean.
+Re-rendered the real `MainWindow` (same technique as §9.4) in the
+"needs attention" demo scenario to confirm the watermark now genuinely
+shows orange/red, matching the unread dots next to it.
+
+**Lesson for next time, written down since it cost real user impact to
+learn**: a short (seconds-to-low-minutes) manual verification run is not
+enough to catch a race condition or slow resource issue — this exact
+flaw passed §9.4's own "ran the real compiled app... stayed responsive"
+check. A multi-minute soak test under continuous realistic polling is now
+the bar for any change to the continuously-running background monitor or
+anything it touches on every tick (the tray icon above all, given this
+finding).
+
+### 9.6 Palette unification, priority rework, flashing, and dead-code cleanup (2026-10-05)
+
+**Requested by the user**, directly building on advice given the same session
+(summarized back to them first, unprompted): unify "Working" to green
+everywhere (icon *and* session-list text, not just the dot), flash the
+tray icon gold for `WaitingForInput`, let `WaitingForInput`/unread win over
+`Working` in the tray icon's priority, and remove the dead
+`TrayAggregateState` enum.
+
+**Color/text unification**: `SessionItemViewModel.StatusBrush`'s `Working`
+case changed from `Brushes.DodgerBlue` to `Brushes.MediumSeaGreen` (now
+identical to the tray icon's own green). `MainWindow.xaml`'s per-row
+status/elapsed `TextBlock` — previously a fixed `Foreground="#999999"`
+regardless of status — now binds `Foreground="{Binding StatusBrush}"`, so
+the whole "Working · 3m" line (not just its dot) renders in the matching
+color for every status, not only `Working`.
+
+**`TrayAggregateState` is no longer dead code**: it already existed
+(`NoSessions`/`Idle`/`Working`/`AttentionNeeded`) but was computed every
+poll and never actually read by anything — `IconBrush`/`IconGlyph`/
+`WatermarkImageSource` each independently reimplemented their own
+`IsAnyWorking`/`UnreadCount` checks. Added a `WaitingForInput` case and
+made it the one real source of truth: `IconBrush`/`WatermarkImageSource`
+are now plain switches over `AggregateState`, computed once in
+`RecomputeAggregateState`. New priority (highest wins — reversed from the
+original, where `Working` always won): `WaitingForInput` and
+`AttentionNeeded` ("this needs you") now both outrank `Working`
+("something's just running"). A new `IsAnyWaitingForInput` property
+(`Sessions.Any(s => s.Status == SessionStatus.WaitingForInput)`) mirrors
+the existing `IsAnyWorking`. `ToolTipText` also gained a "waiting for
+input" count alongside "working"/"need attention", for consistency.
+
+**The flash feature needed a real design change after a second real
+crash, not just an implementation**: a first attempt toggled
+`IconBrush` (Goldenrod/Gray) continuously every 800ms for as long as
+`WaitingForInput` held, via a dedicated `DispatcherTimer` — the obvious,
+literal reading of "flash". A dedicated soak test (learned the hard way
+in §9.5 to always soak-test anything touching the tray icon on a tight
+interval) reproduced **the exact same H.NotifyIcon GDI+ race from §9.5**
+within ~60–90 seconds — this time via flat-color toggling, with no image
+involved at all, proving the bug is about *regeneration frequency*, not
+specifically about image decoding being slow. §9.5's fix (revert to flat
+colors) only ever made the *existing* 3-second-poll-driven, change-only-
+on-real-transition pattern safe — it never made *arbitrary* high-frequency
+`GeneratedIconSource` property churn safe in general, and continuous
+800ms flashing is exactly that.
+
+**Fix: a bounded flash burst, not continuous flashing.** On the actual
+transition *into* `WaitingForInput` (not on every poll while already in
+it), the icon flashes `FlashToggleCount` (6) times — about 4.8 seconds —
+then the timer stops itself and the icon settles on a steady Goldenrod
+for as long as the state persists, however long that is. This stays
+within the same "occasional short burst of property changes, then quiet"
+shape already proven safe (a normal state transition changes 3+
+properties together, same order of magnitude as 6 bounded toggles),
+rather than introducing a new "sustained high-frequency stream" shape
+(the one pattern now proven, twice, to be unsafe with this library). If
+the state leaves `WaitingForInput` mid-burst, the timer stops early and
+the icon settles on its new (non-flashing) color immediately. The popup
+watermark does *not* flash even for `WaitingForInput` (a 4th baked
+Goldenrod variant, `TrayIcon.Watermark.WaitingForInput.png`, is static) —
+it's a plain `Image.Source` binding with no H.NotifyIcon involvement, so
+nothing requires it to stay bounded, but there's no equivalent "catch the
+most urgent signal" reason to animate a background watermark either.
+
+**Verified, at the same bar §9.5 set**: a dedicated 5-minute soak test of
+the *first* (continuous-flash) design reproduced the crash directly
+(confirmed via the real exception, not inferred) — proving the caution
+was warranted, not theoretical. The *bounded-burst* redesign was then
+soak-tested the same way: 5 full minutes with a real `TaskbarIcon`/
+`GeneratedIconSource` (via `MainWindow.InitializeTrayIcon()`, matching
+`App.xaml.cs` exactly) forced into `WaitingForInput`, sampling memory/
+handles every 30s — flat memory (~95MB, no growth), handles *decreasing*
+slightly, zero exceptions, and the burst visibly stopped after ~5s and
+stayed steady for the remaining ~4.9 minutes. Separately verified
+*correctness* (not just safety): transitioning into `WaitingForInput`
+triggers exactly 6 toggles then settles; leaving it mid-state immediately
+stops and shows the new color with no stray toggling; transitioning back
+in later re-triggers a fresh 6-toggle burst. Re-rendered the real
+`MainWindow` to confirm visually: the "Working" row's dot *and* text are
+green, the `WaitingForInput` row's text is gold (matching its dot, as it
+already did), and the popup watermark shows gold whenever any session is
+`WaitingForInput`. All 69 tests still pass; solution rebuilds clean. Real
+compiled app stopped, rebuilt, and relaunched — confirmed responsive after
+60+ seconds against this machine's real live data, with zero visible
+error dialogs and zero new crash-log entries.
+
+#### Follow-up (same day): "Waiting for input" was the wrong label for what it means in practice
+
+**Reported by the user**, with a screenshot of two real (not demo) sessions
+genuinely idle for 5h11m and 1d16h, both labeled "Waiting for input" —
+followed by a back-and-forth that corrected an assumption made earlier the
+same day: the label's own wording implies "Copilot asked something and is
+waiting on your immediate next message, mid-conversation" (and that's what
+this assistant initially, incorrectly, told the user it meant). The
+user's real evidence said otherwise: sessions idle for hours/a day are, in
+their actual experience, simply *done* — not sitting mid-conversation
+awaiting a quick reply.
+
+**Root cause, confirmed against this plan's own §2.3 research rather than
+re-guessed**: `open-sessions-state.json`'s `working` flag (the only signal
+`SessionStatus.WaitingForInput` is derived from — see
+`TrayViewModel.BuildOpenSessionItemAsync`) is just "is a turn currently
+processing, yes/no" — Copilot CLI itself has no distinct signal for "this
+genuinely still expects you to say something very soon" versus "this
+finished and has been sitting untouched." Both report `working: false`
+identically. For a session discovered already-idle (which is what
+`WaitingForInput` specifically represents — see its own doc comment), the
+long-idle case is overwhelmingly the realistic one, exactly as the user's
+own two real sessions showed.
+
+**Fix — wording only, not behavior**: `SessionItemViewModel.StatusLabelFor`
+now displays `SessionStatus.WaitingForInput` as **"Completed"**, not
+"Waiting for input". `TrayViewModel.ToolTipText`'s matching count changed
+from "N waiting for input" to "N completed" for the same reason. The
+underlying `SessionStatus.WaitingForInput` enum value, the tray icon's
+gold flash trigger, and the §9.6 priority ordering are all **unchanged** —
+the *behavior* the user asked for (flash gold, outrank Working) was
+already correct for what they actually wanted; only the displayed English
+description was wrong. Demo scenario 1's illustrative detail text
+("Waiting on next instruction.") was also updated ("Deployed the hotfix;
+smoke tests passed.") so the demo row's own fake detail text doesn't
+contradict its new "Completed" label. The toast notification body shown
+on a live `Finished` transition ("Finished a turn and is waiting for
+input.") was deliberately left unchanged — that text describes a
+different, genuinely-just-now event, not this long-idle steady state, so
+it wasn't actually wrong.
+
+**Verified**: this is a label/string-only change (no icon-regeneration
+code touched), so no soak test was needed — confirmed instead by
+rendering the real `MainWindow`/`TrayViewModel` (scenario 1) and reading
+the real `ToolTipText` property: the row now reads "Completed · 9m" in
+gold, and the tooltip reads "... completed ...". All 69 tests pass;
+solution rebuilds clean. Real compiled app stopped, rebuilt, and
+relaunched — confirmed responsive.
+
+#### Follow-up (same day, again): "Completed" still overclaimed — demoted to a stub, not just relabeled
+
+**Challenged by the user**, with sharp, correct reasoning: "if it was
+already done by the time you looked, shouldn't it be idle and gray?" — if
+this app genuinely can't tell *when* a `WaitingForInput` session actually
+went idle (seconds ago vs. days ago), confidently labeling it "Completed"
+overclaims something it doesn't know, same as "Waiting for input" did
+before it. Gold, flashing, and outranking `Working` all imply "this is
+fresh, important news" — which isn't a claim this app can actually back
+for this particular status.
+
+**Decision, given by the user directly rather than inferred**: rather
+than silently demoting the status to a bare "Idle" and quietly dropping
+the whole concept, mark the *distinction* ("is this genuinely awaiting a
+reply, or just long-done?") as **not implemented** — keep the enum values
+and the switch-case "slots" that would drive its visual treatment, but
+stop pretending to compute something this app has no real signal for.
+This preserves a clear, named place to plug in a real implementation
+later (e.g. if a future Copilot CLI version exposes a genuine "awaiting
+reply" flag or a specific `events.jsonl` terminal event), without losing
+today's design work or having to rediscover where it plugs in.
+
+**Implemented**:
+- `TrayViewModel.IconBrush`/`WatermarkImageSource`: the `WaitingForInput`
+  switch arms are removed; that status now falls through to the same
+  gray/idle treatment as everything else below `Working`. Both properties'
+  doc comments now explain this is a deliberate stub, not an oversight.
+- `RecomputeAggregateState`: no longer ever assigns
+  `TrayAggregateState.WaitingForInput` — priority reverts to
+  `NoSessions > AttentionNeeded (unread) > Working > Idle`, the same
+  structure as before the flash feature existed, keeping only the
+  (separately well-justified, unchanged) `AttentionNeeded`-over-`Working`
+  reversal from earlier today.
+- **The entire flash-burst mechanism is deleted**: `FlashInterval`,
+  `FlashToggleCount`, `_flashTimer`, `_isFlashOn`, `_remainingFlashToggles`,
+  and the burst-start/stop logic in `RecomputeAggregateState` are all
+  gone. This is also, concretely, the removal of the single riskiest piece
+  of code added today — the one that needed a dedicated soak test and
+  came with several paragraphs of crash-safety reasoning. Removing it
+  because it's no longer wanted is a strictly good simplification
+  regardless of the crash history.
+- `SessionItemViewModel.StatusBrush`: `WaitingForInput` → `Brushes.Gray`
+  (was `Goldenrod`). `StatusLabelFor`: `WaitingForInput` → `"Idle"` (was
+  `"Completed"`) — "Idle" makes no claim either way, which is the honest
+  answer.
+- `TrayAggregateState.WaitingForInput` and `SessionStatus.WaitingForInput`
+  (Core) are both kept, now documented as intentionally-unimplemented
+  stubs rather than live, computed states.
+- `TrayViewModel.ToolTipText`'s "N completed" segment is removed entirely
+  (reverted to its pre-today wording) — there's no longer a confident
+  claim to report a count of.
+- The 4th watermark PNG (`TrayIcon.Watermark.WaitingForInput.png`, gold)
+  and its `Resource` entry are deliberately **kept**, just not currently
+  selected by any switch arm — ready to reuse instantly if this is
+  properly implemented later, at zero cost today beyond its own bytes.
+
+**Verified**: rebuilt clean (0 warnings/errors) — the clean rebuild itself
+confirms no dangling references to the deleted flash-timer fields/
+constants were missed. All 69 tests still pass. Reflectively exercised
+the real `TrayViewModel` (scenario 1, the pure-`WaitingForInput` demo row)
+and confirmed `AggregateState` is now `Idle` (not `WaitingForInput`) and
+`IconBrush` is `#FF808080` (gray, not gold) — then rendered the real
+`MainWindow` and confirmed visually: "Idle · 9m" in neutral gray, with the
+gray/idle watermark. No soak test needed this time — the change is a
+removal of risky code plus label/color simplification, not a new
+continuously-ticking mechanism. Real compiled app stopped, rebuilt, and
+relaunched — confirmed responsive.
+
+#### Follow-up (same day, again): "When I clicked the cycle demo data, it seems the status are not synced" — actually a recurrence of the GDI+ race, reachable via ordinary clicks
+
+**Reported by the user** in exactly those words. Investigated first at the
+ViewModel level: subscribed to `TrayViewModel.PropertyChanged` and cycled
+through all 6 demo scenarios directly — `AggregateState`, `IconBrush`, and
+`Sessions` were perfectly consistent with each other at every step, so the
+"desync" wasn't a ViewModel logic bug. Suspected the native tray-icon
+rendering layer instead and built a rapid-fire stress test: 12 back-to-back
+`CycleDemoScenarioCommand.Execute(null)` calls, no delay, against a **real**
+`TaskbarIcon` (via `window.InitializeTrayIcon()`, not a mock) — and it
+reproduced the exact same `ExternalException (0x80004005): A generic error
+occurred in GDI+` crash from §9.5/§9.6, on demand, from nothing more than
+ordinary fast clicking. No custom timer involved this time at all.
+
+**This was a more severe finding than §9.5's original fix accounted for**,
+on two counts:
+1. It proved the earlier fix (removing the flash timer) only removed
+   *one* trigger of the race, not the race itself — the race lives in
+   `TaskbarIcon.IconSource`'s own binding plumbing, not in anything
+   app-specific like a timer.
+2. The stack trace showed these exceptions land on background
+   `ThreadPool` threads (`System.Threading.ThreadPoolWorkQueue.Dispatch()`),
+   **not** the UI dispatcher thread — meaning `App.OnDispatcherUnhandledException`
+   (the dialog-storm fix from §9.5) cannot catch them at all. An unhandled
+   exception on an arbitrary background thread terminates the whole process
+   immediately by .NET default, with zero dialog — silently worse than the
+   "can't shut down, keeps popping up dialogs" crash reported earlier.
+
+**Root cause, confirmed by fetching H.NotifyIcon's real source from
+GitHub, not guessed from behavior alone**: binding `TaskbarIcon.IconSource`
+to a `GeneratedIconSource` makes `TaskbarIcon` subscribe to that source's
+`DependencyPropertyChanged` event with an `async void` handler that calls
+`Icon = await newValue.ToIconAsync()` — un-awaited by the caller and never
+cancelled against any previous in-flight call. Two property changes
+(`Text`, `Background`, `TextMargin`, ...) close enough together in time
+race two concurrent `ToIconAsync()` calls against the same non-thread-safe
+GDI+ `Bitmap`/`Graphics` objects. This is a defect in how `TaskbarIcon`
+itself drives `IconSource`, not in anything specific to this app's demo
+timer or its flash feature — both of those only mattered as *ways to
+trigger it faster*.
+
+**Fix — architectural, not another mitigation**: stop using
+`TaskbarIcon.IconSource` entirely.
+- `MainWindow.xaml`: the `<tb:TaskbarIcon.IconSource><tb:GeneratedIconSource
+  .../></tb:TaskbarIcon.IconSource>` binding block is removed outright
+  (replaced with an explanatory comment) — not merely left unused.
+- `MainWindow.xaml.cs`: added a single reused `GeneratedIconSource
+  _iconGenerator` field, and a new `UpdateTrayIcon()` method that copies
+  `IconGlyph`/`IconBrush`/`IconFontSize`/`IconTextMargin` from the
+  ViewModel onto it and assigns `TrayIcon.Icon = _iconGenerator.ToIcon()`
+  — the library's *synchronous* bake method (confirmed via source:
+  `public Icon ToIcon() { using var bitmap = GenerateIconBitmap(); return
+  Icon.FromHandle(bitmap.GetHicon()); }`), called directly, not the async
+  one. A new `OnViewModelPropertyChangedForTrayIcon` handler, subscribed
+  once in the constructor, filters `TrayViewModel.PropertyChanged` for
+  exactly those four properties and calls `UpdateTrayIcon()` synchronously
+  on the UI thread — the same thread `TrayViewModel`'s own property
+  setters already raise `PropertyChanged` on. `InitializeTrayIcon()` now
+  also calls `UpdateTrayIcon()` once up front, since nothing will "change"
+  to trigger the first render now that there's no reactive binding.
+
+  Why this is actually race-free rather than just differently risky:
+  nothing in this path is `async`/fire-and-forget, so a second call can
+  only ever begin after the first has fully returned — overlapping calls
+  are structurally impossible, not just statistically unlikely the way a
+  faster machine or a removed timer merely made *less probable*.
+
+**Verified empirically, not just reasoned about**:
+- Solution rebuilds clean, 0 warnings/errors; all 69 tests still pass
+  (Core untouched).
+- Re-ran the **exact same rapid-fire stress test** against the new code: 11
+  back-to-back calls (deliberately not a multiple of 6, so the result
+  actually exercises a different scenario rather than coincidentally
+  landing back on the same one), then 5 more rounds of 12 back-to-back
+  calls each — 71 rapid-fire cycles total against a real `TaskbarIcon`,
+  zero delay between calls. **Zero exceptions**, where the old code crashed
+  almost immediately under the same conditions. `AggregateState=Working`
+  correctly paired with `IconBrush=#FF3CB371` (green) throughout, confirming
+  state/color consistency, not just crash-safety.
+- Visual regression check: rendered all 6 demo scenarios' icons via an
+  independent `GeneratedIconSource` (mirroring `UpdateTrayIcon()`'s own
+  property mapping) to PNG and inspected them — green circle for Working,
+  orange circle with unread-count badge for AttentionNeeded, gray circle
+  for Idle, all rendering correctly with no corruption or blank output.
+  The bake logic itself (`GenerateIconBitmap()`/`ToIcon()`) is unchanged
+  library code; only the call site's sync/async timing changed, so this
+  was a confirmation check rather than an expected source of new bugs.
+- Real compiled app stopped, rebuilt, and relaunched; confirmed responsive.
+
+#### Follow-up (same day, yet again): tray icon still didn't match the popup after the above fix — a second, independent bug
+
+**Reported by the user**, with three screenshots: tray icon gray while the
+popup showed a session "Working" (green); tray icon green while the popup
+showed every session "Idle" (gray); tray icon red/orange while the popup
+showed "Idle" (gray). In every case the tray icon's color matched the
+*previous* state, not the current one — and the user also asked, fairly,
+whether they just needed to restart the app to pick up the earlier fix (a
+fresh restart had already happened before these screenshots, so this was
+a real remaining bug, not a stale-binary question).
+
+**Root cause, confirmed by direct reproduction rather than inferred from
+the screenshots alone**: `RecomputeAggregateState()` raised its explicit
+`OnPropertyChanged(nameof(IconBrush))` (and `IconGlyph`/
+`WatermarkImageSource`/`IconTextMargin`/`ToolTipText`) calls **before** the
+line that actually assigns the new `AggregateState` value. Since
+`PropertyChanged` is an ordinary synchronous .NET event, any subscriber
+that reads `IconBrush`'s getter *while handling* that notification —
+including today's earlier fix, `MainWindow`'s own
+`OnViewModelPropertyChangedForTrayIcon` → `UpdateTrayIcon()`, which does
+exactly this — would evaluate `IconBrush`'s `AggregateState switch { ... }`
+against the **old** `AggregateState`, one transition behind, every single
+time. Built a small harness subscribing to `TrayViewModel.PropertyChanged`
+and comparing `AggregateState` (read synchronously inside the `IconBrush`
+notification handler) against what `Sessions` actually implied at that
+instant: **7 of 8** rapid demo-cycle notifications showed a mismatch
+before this fix. This is a second, independent bug from §9.6's `IconSource`
+race — that one was about *overlapping* icon bakes; this one is a plain
+ordering mistake that makes every single update exactly one step stale,
+deterministically, with or without any concurrency involved at all. It
+predates today's `IconSource` removal (the old reactive XAML binding would
+have shown the exact same staleness, for the same reason — it just hadn't
+been specifically noticed/attributed before).
+
+**Fix**: reordered `RecomputeAggregateState()` so the `AggregateState =
+...` assignment happens **first**, and all the explicit
+`OnPropertyChanged` notifications for its dependent properties
+(`UnreadCount`, `IsAnyWorking`, `IsAnyWaitingForInput`, `IconGlyph`,
+`IconBrush`, `WatermarkImageSource`, `IconTextMargin`, `ToolTipText`) are
+raised **after** — so by the time any subscriber's handler runs, reading
+any of these properties reflects the new state. No subscriber or binding
+needed to change; this was purely an internal ordering bug in one method.
+
+**Verified**:
+- Re-ran the same before/after harness against the fix: **0 of 8**
+  mismatches (was 7 of 8).
+- Combined with a repeat of the rapid-fire `TaskbarIcon` stress test from
+  the previous follow-up (96 rapid-fire clicks total this time, across 8
+  rounds of 12), now also asserting `AggregateState` matches what
+  `Sessions` implies after *every single* click, not just checked at the
+  end: **0 mismatches, 0 exceptions** — confirming this fix and the
+  `IconSource`-removal fix compose correctly together (neither one
+  reintroduces the other's bug).
+- All 69 tests still pass; solution rebuilds clean (0 warnings/errors).
+- Real compiled app stopped, rebuilt, and relaunched; confirmed responsive.
+
+#### Follow-up (same day): "Read" didn't clear the red text, and a golden Guanyin glyph replaces the Idle dot
+
+**Reported by the user**, two requests together: (1) "when I click read button, the color of the text is still red"; (2) "when it's idle, instead of using gray dot, can you use the guanyin svg in a golden color?"
+
+**Issue 1 root cause**: `SessionItemViewModel.StatusBrush` switched only on `Status`, not `IsUnread` — `Finished` always rendered `OrangeRed`, forever, even after `TrayViewModel.MarkSessionRead` (the "✓ Read" button's command) flipped `IsUnread` to `false`. That command only ever changes `IsUnread`, never `Status` (a session really did finish — that fact doesn't change), so the color never had a code path that reacted to being acknowledged. The orange-red exists specifically to say "fresh, needs attention"; once read, that claim is no longer true, same reasoning already applied to `WaitingForInput`/"Idle" earlier today.
+
+**Fix**: `StatusBrush` now renders `SessionStatus.Finished` as `OrangeRed` only `when IsUnread`, falling through to `Gray` once read — the status label still correctly says "Finished" (that's a true, permanent fact), only the alarm color goes away. Added the missing `[NotifyPropertyChangedFor(nameof(StatusBrush))]` on `_isUnread` so this actually updates live (the same class of bug as the `AggregateState`/`IconBrush` ordering issue fixed earlier today, caught here by inspection rather than a fresh repro, since the shape of the bug was now a known pattern to check for).
+
+**Issue 2 implementation**: added `SessionItemViewModel.StatusIconSource`/`StatusIconVisibility`/`StatusDotVisibility`, shown only for `SessionStatus.WaitingForInput` ("Idle") rows. Rather than baking new art, this **reuses the existing `TrayIcon.Watermark.WaitingForInput.png`** asset directly — already a gold render of the user's bodhisattva SVG on a transparent background, previously kept loaded-but-unused in `TrayViewModel` specifically so a future reuse like this wouldn't need a re-bake (confirmed its background is genuinely transparent, not white, by inspecting the PNG's alpha channel directly: corner pixel `A=0`). `MainWindow.xaml`'s per-row template now has both the original `Ellipse` (`Visibility` bound to `StatusDotVisibility`, collapsed for Idle) and a new small `Image` (bound to `StatusIconVisibility`/`StatusIconSource`, visible only for Idle) layered in the same grid cell.
+
+**Verified**: rendered the real `MainWindow`'s session list (demo scenario 0, which has both a `Finished`+unread row and a `WaitingForInput` row) to PNG before/after invoking the real `MarkSessionReadCommand` — confirmed visually and via direct property checks: the Finished row's dot/text/unread-dot/Read-button all correctly go from red+visible to gray+gone after "Read"; the Idle row shows the small gold glyph in place of a dot throughout. All 69 tests pass; solution rebuilds clean. Real compiled app stopped, rebuilt, and relaunched; confirmed responsive.
+
+#### Follow-up (same day): the tray icon's own gray circle replaced with the gold glyph too
+
+**Requested by the user**: "can you also make the gray tray icon into the golden glyph? the gray dot does not look good" — extending the same per-row change to the actual Win32 system tray icon itself, which still rendered every non-Working/non-AttentionNeeded state as a flat gray `GeneratedIconSource` circle.
+
+**Why this was safe to do today specifically**: an image-based tray-icon background (`GeneratedIconSource.BackgroundSource`) was deliberately avoided back in §9.5 — at the time, `IconBrush`'s own doc comment warned that *any* `GeneratedIconSource` property change independently fired an un-awaited `ToIconAsync()` regeneration via `TaskbarIcon.IconSource`'s reactive binding, so a slower-to-render image background made the concurrent-regeneration race easier to hit. That whole reactive pipeline no longer exists as of this same day's earlier `IconSource`-removal follow-up — `MainWindow.xaml.cs` now sets every `GeneratedIconSource` property itself and calls the synchronous `ToIcon()` exactly once per real change. An image background no longer has a reactive path to race against at all, regardless of how long baking it takes.
+
+**Implementation**: confirmed via reflection against the installed `H.NotifyIcon.Wpf` 2.4.1 DLL, then the library's real source (fetched from GitHub), that `GeneratedIconSource.BackgroundSource` (an `ImageSource`) exists precisely for this. Added `TrayViewModel.IconBackgroundSource` — `null` for `AttentionNeeded`/`Working` (where the flat color + glyph/badge is what actually needs to stay legible), and the same gold bitmap as the per-row icon (`WaitingForInputWatermarkImage` — reused again, not re-baked a third time) for every other state. `IconBrush`'s own gray branch became `Brushes.Transparent` for those states, since the image itself (transparent background, opaque gold figure) is now the entire visual. `MainWindow.xaml.cs`'s `UpdateTrayIcon()` now also sets `_iconGenerator.BackgroundSource`, and its `PropertyChanged` filter now includes `IconBackgroundSource`; `RecomputeAggregateState()`'s notification list (already fixed to notify after assigning `AggregateState`, see the follow-up above) now includes it too.
+
+**Verified**:
+- Re-ran the rapid-fire stress test (96 clicks) against the new image-background code path specifically: **zero exceptions** — confirms the reasoning above empirically, not just in theory.
+- Rendered all 6 demo scenarios' tray icons to PNG: `AttentionNeeded`/`Working` unaffected (flat orange/green circle, unchanged); `Idle`/`NoSessions` now show the gold glyph on a transparent background, `IconBackgroundSource` correctly `null`/non-null in exactly the expected states.
+- Downscaled the rendered icon to 16/24/32px (real taskbar sizes at 100%/150%/200% DPI) to check legibility at actual size — the figure (arms, halo, seated posture) stays recognizable down to 32px and is a visible, non-blank glyph even at 16px, not a blurred blob.
+- All 69 tests pass; solution rebuilds clean. Real compiled app stopped, rebuilt, and relaunched; confirmed responsive.
+
+#### Follow-up (same day): read-Finished rows looked indistinguishable from genuinely Closed ones
+
+**Reported by the user**: "when I click read, it becomes gray from red, but I think the session is still idle and not closed." A sharp catch, in the same spirit as the earlier "shouldn't it be idle and gray?" pushback: the previous fix (read `Finished` → `Brushes.Gray`) made that row use the exact same plain `Ellipse` dot as a genuinely `SessionStatus.Closed` session — silently conflating "this process has actually ended" with "this finished a turn, you've seen it, nothing further is known" (which is substantively the same uncertain, non-alerting situation as `WaitingForInput`/"Idle" — this app already can't claim anything more specific there either, per §2.3/§9.6's running reasoning).
+
+**Fix**: `SessionItemViewModel` gained a private `IsIdleLike` check — true for `WaitingForInput` **or** a read `Finished` row — and `StatusDotVisibility`/`StatusIconVisibility` now key off that instead of `Status == WaitingForInput` alone. A read `Finished` row now shows the same gold glyph as an Idle row instead of the plain dot; a genuinely `Closed` row still gets the plain gray dot, untouched — preserving exactly the distinction the user pointed at ("idle" vs. "closed" are no longer the same gray circle). `StatusLabel` is deliberately left alone: a read row still correctly says "Finished", not "Idle" — only the dot/icon changes, since that label is still a true, permanent fact, unlike the glyph choice which is purely about alerting/non-alerting.
+
+**Verified**: built four `SessionItemViewModel`s directly (unread-Finished, read-Finished, WaitingForInput, genuinely-Closed) and checked `StatusDotVisibility`/`StatusIconVisibility` for all four — matched expectations exactly (dot/icon/icon/dot). Rendered the real session list: unread-Finished still shows the red dot/text/Read button; read-Finished and WaitingForInput both show the gold glyph with gray text ("Finished"/"Idle" respectively, correctly still distinct in text); Closed shows the plain gray dot, visually distinct from the other two. All 69 tests pass; solution rebuilds clean. Real compiled app stopped, rebuilt, and relaunched; confirmed responsive.
+
 ## 10. Milestones
 
 1. **Phase 0 — Spike**: throwaway console app that polls
@@ -637,8 +1315,9 @@ confirmed responsive afterward.
    computed from a static, seeded session list — no file/process reading.
    Right-click context menu: show sessions popup, mark all read, cycle
    between four fixed demo scenarios (to exercise all icon/list states),
-   mute toggle (in-memory only), **real** run-at-startup toggle (Registry
-   Run key, via `Services/StartupRegistration.cs`), **real** "open Copilot
+   mute toggle (in-memory only), **real** run-at-startup toggle (originally
+   a Registry Run key; revised 2026-10-01 to a Scheduled Task — see §9.3 —
+   via `Services/StartupRegistration.cs`), **real** "open Copilot
    logs folder" action, and quit. Left-click toggles a small popup window
    (repurposed `MainWindow`) listing the fake sessions with status dot,
    detail snippet, elapsed time, and an unread marker. `CopilotSessionTray.Core`
@@ -858,9 +1537,10 @@ confirmed responsive afterward.
    unimplemented pending a settings UI (see above).
 7. **Phase 5 — Settings & polish**: mute/quiet hours, watch-list filter,
    icon states, auto-start, single-instance guard. Distribution stays
-   xcopy/zip (see §11) — auto-start is just a Startup-folder shortcut, no
-   installer involved. **Mute is now real** (see above); the rest is
-   unstarted.
+   xcopy/zip (see §11) — auto-start is a per-user Scheduled Task (not an
+   installer). **Mute is now real** (see above); **auto-start now includes
+   crash-recovery, and a single-instance guard is in place** (2026-10-01,
+   see §9.3); quiet hours/watch-list filter remain unstarted.
 8. **Phase 6 — Stretch**: history/search view, usage/cost dashboard, toast
    actions.
 

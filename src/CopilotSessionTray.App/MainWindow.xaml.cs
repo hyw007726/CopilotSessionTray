@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Threading;
 using CopilotSessionTray.App.Services;
 using CopilotSessionTray.App.ViewModels;
+using H.NotifyIcon;
 
 namespace CopilotSessionTray.App;
 
@@ -21,11 +22,24 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _singleClickTimer;
 
     private readonly NotificationService _notificationService;
+    private readonly TrayViewModel _viewModel;
+
+    /// <summary>
+    /// Reused across every <see cref="UpdateTrayIcon"/> call rather than constructed fresh each
+    /// time — purely to avoid needless allocation; its own property values are overwritten
+    /// in-place on every call, so nothing about reuse affects correctness here.
+    /// </summary>
+    private readonly GeneratedIconSource _iconGenerator = new()
+    {
+        Foreground = System.Windows.Media.Brushes.White,
+        FontWeight = FontWeights.Bold,
+    };
 
     public MainWindow(TrayViewModel viewModel, NotificationService notificationService)
     {
         InitializeComponent();
         DataContext = viewModel;
+        _viewModel = viewModel;
         _notificationService = notificationService;
         _singleClickTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
         _singleClickTimer.Tick += (_, _) =>
@@ -33,6 +47,50 @@ public partial class MainWindow : Window
             _singleClickTimer.Stop();
             TogglePopup();
         };
+
+        // See UpdateTrayIcon's own doc comment for why this replaces an IconSource XAML binding.
+        _viewModel.PropertyChanged += OnViewModelPropertyChangedForTrayIcon;
+    }
+
+    private void OnViewModelPropertyChangedForTrayIcon(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(TrayViewModel.IconGlyph) or nameof(TrayViewModel.IconBrush)
+            or nameof(TrayViewModel.IconBackgroundSource)
+            or nameof(TrayViewModel.IconTextMargin) or nameof(TrayViewModel.IconFontSize))
+        {
+            UpdateTrayIcon();
+        }
+    }
+
+    /// <summary>
+    /// Regenerates and assigns the tray icon directly — <c>TrayIcon.Icon</c> (a plain
+    /// <c>System.Drawing.Icon</c>), not <c>TrayIcon.IconSource</c> (an <c>ImageSource</c>, no
+    /// longer bound at all; see <c>MainWindow.xaml</c>'s own comment at the <c>TaskbarIcon</c>).
+    /// </summary>
+    /// <remarks>
+    /// <b>Why this is actually race-free, not just differently risky</b>
+    /// (IMPLEMENTATION_PLAN.md §9.6 follow-up): binding <c>IconSource</c> to a
+    /// <c>GeneratedIconSource</c> makes <c>TaskbarIcon</c> itself subscribe to that source's
+    /// <c>DependencyPropertyChanged</c> event and call the library's own <c>async void</c>
+    /// handler — <c>Icon = await newValue.ToIconAsync()</c> — un-awaited and un-cancelled against
+    /// any previous in-flight call, on *every single* property change. Two changes close enough
+    /// together (confirmed via a real, reproduced crash — not just reasoned about — from
+    /// ordinary rapid clicks on "Cycle demo data", not only the since-removed continuous flash
+    /// timer this was first found with) race on the same non-thread-safe GDI+
+    /// <c>Bitmap</c>/<c>Graphics</c> objects. This method instead calls the *synchronous*
+    /// <c>GeneratedIconSource.ToIcon()</c> directly, on the UI thread, exactly once per real
+    /// property change (filtered in <see cref="OnViewModelPropertyChangedForTrayIcon"/>) — nothing
+    /// here is <c>async</c>/fire-and-forget, so a second call can only ever begin after the first
+    /// one has fully returned; overlapping calls are structurally impossible, not just unlikely.
+    /// </remarks>
+    private void UpdateTrayIcon()
+    {
+        _iconGenerator.Text = _viewModel.IconGlyph;
+        _iconGenerator.Background = _viewModel.IconBrush;
+        _iconGenerator.BackgroundSource = _viewModel.IconBackgroundSource;
+        _iconGenerator.FontSize = _viewModel.IconFontSize;
+        _iconGenerator.TextMargin = _viewModel.IconTextMargin;
+        TrayIcon.Icon = _iconGenerator.ToIcon();
     }
 
     /// <summary>
@@ -45,6 +103,8 @@ public partial class MainWindow : Window
     public void InitializeTrayIcon()
     {
         TrayIcon.ForceCreate();
+        UpdateTrayIcon(); // IconSource is no longer bound (see its own comment), so the icon needs
+                          // an explicit first render — nothing will "change" to trigger one otherwise.
         _notificationService.AttachTrayIcon(TrayIcon);
     }
 

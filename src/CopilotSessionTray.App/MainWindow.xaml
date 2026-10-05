@@ -43,24 +43,20 @@
                         TrayLeftMouseUp="TrayIcon_TrayLeftMouseUp"
                         TrayLeftMouseDoubleClick="TrayIcon_TrayLeftMouseDoubleClick"
                         TrayBalloonTipClicked="TrayIcon_TrayBalloonTipClicked">
-            <tb:TaskbarIcon.IconSource>
-                <!--
-                    FontSize/TextMargin are both bound (not literal): GeneratedIconSource always
-                    draws via a fixed text rectangle (derived from TextMargin) using GDI+'s
-                    StringFormat.GenericTypographic, which anchors top-left rather than centering.
-                    IconFontSize compensates for system DPI scaling (the control scales
-                    Size/TextMargin by DPI internally but not FontSize). IconTextMargin measures
-                    the actual current glyph and computes a margin that centers that specific
-                    glyph — a single static margin can't center every glyph equally well, since
-                    narrow glyphs like "1" occupy less visual width than "9+" at the same size.
-                -->
-                <tb:GeneratedIconSource Text="{Binding IconGlyph}"
-                                        Foreground="White"
-                                        Background="{Binding IconBrush}"
-                                        FontSize="{Binding IconFontSize}"
-                                        FontWeight="Bold"
-                                        TextMargin="{Binding IconTextMargin}" />
-            </tb:TaskbarIcon.IconSource>
+            <!--
+                No IconSource binding here (2026-10-05, IMPLEMENTATION_PLAN.md §9.6 follow-up) —
+                deliberately removed, not merely left unused. A GeneratedIconSource bound via
+                IconSource makes TaskbarIcon subscribe to its own DependencyPropertyChanged event
+                and call the library's un-awaited, fire-and-forget ToIconAsync() on *every* change
+                — confirmed (via a real crash, reproduced on demand, not just reasoned about) that
+                two such changes close enough together race on the same non-thread-safe GDI+
+                Bitmap/Graphics objects, regardless of how the properties change or how fast.
+                Rapid, completely ordinary clicks on "Cycle demo data" were enough to reproduce it
+                — not just the since-removed continuous flash timer this was first found with
+                (IMPLEMENTATION_PLAN.md §9.5/§9.6). TrayIcon.Icon is instead set directly, once per
+                real change, synchronously on the UI thread, from MainWindow.xaml.cs's
+                UpdateTrayIcon() — see its own doc comment for why that's actually race-free.
+            -->
             <tb:TaskbarIcon.ContextMenu>
                 <ContextMenu>
                     <MenuItem Header="{Binding TrayMenuHeaderText}" IsEnabled="False" FontWeight="Bold" />
@@ -89,6 +85,28 @@
                        Text="{Binding HeaderSubtitleText}" />
         </StackPanel>
 
+        <!--
+            Watermark (2026-10-02, see IMPLEMENTATION_PLAN.md §9.4/§9.5) — the same bodhisattva
+            artwork as the tray icon, faint and color-matched to its current state (green/orange/
+            gray — see TrayViewModel.WatermarkImageSource), purely decorative/branding behind the
+            session list and empty-state text. Declared before (so behind, in z-order) the
+            ListBox/empty-state TextBlock below, both of which keep a transparent background
+            specifically so this shows through. IsHitTestVisible/Focusable=False so it can never
+            intercept clicks meant for the list/buttons on top of it. Plain Image.Source binding
+            — deliberately not going anywhere near H.NotifyIcon/GeneratedIconSource, so none of
+            the concurrency risk documented on TrayViewModel.IconBrush applies here.
+        -->
+        <Image Grid.Row="1"
+               Source="{Binding WatermarkImageSource}"
+               Width="220" Height="220"
+               Opacity="0.08"
+               Stretch="Uniform"
+               HorizontalAlignment="Center"
+               VerticalAlignment="Center"
+               Margin="0,0,0,40"
+               IsHitTestVisible="False"
+               Focusable="False" />
+
         <ListBox Grid.Row="1"
                  Margin="8,0,8,8"
                  ItemsSource="{Binding Sessions}"
@@ -112,12 +130,30 @@
                                      Width="10" Height="10"
                                      Margin="0,3,8,0"
                                      VerticalAlignment="Top"
-                                     Fill="{Binding StatusBrush}" />
+                                     Fill="{Binding StatusBrush}"
+                                     Visibility="{Binding StatusDotVisibility}" />
+
+                            <!--
+                                Golden bodhisattva glyph shown instead of the plain dot for
+                                Idle rows (2026-10-05, user request) — reuses the existing
+                                gold watermark asset at icon size; see
+                                SessionItemViewModel.StatusIconSource's own doc comment.
+                            -->
+                            <Image Grid.Row="0" Grid.Column="0"
+                                   Width="15" Height="15"
+                                   Margin="-2,1,8,0"
+                                   VerticalAlignment="Top"
+                                   Stretch="Uniform"
+                                   Source="{Binding StatusIconSource}"
+                                   Visibility="{Binding StatusIconVisibility}" />
 
                             <StackPanel Grid.Row="0" Grid.Column="1">
                                 <TextBlock FontWeight="SemiBold" TextTrimming="CharacterEllipsis" Text="{Binding DisplayName}" />
                                 <TextBlock FontSize="11" Foreground="Gray" TextWrapping="Wrap" Text="{Binding Detail}" />
-                                <TextBlock FontSize="10" Foreground="#999999">
+                                <!-- Foreground bound to StatusBrush (2026-10-05, §9.6) so the
+                                     status text itself is color-coded the same as its dot/the
+                                     tray icon (e.g. green for "Working"), not just the dot. -->
+                                <TextBlock FontSize="10" Foreground="{Binding StatusBrush}">
                                     <Run Text="{Binding StatusLabel, Mode=OneWay}" />
                                     <Run Text=" · " />
                                     <Run Text="{Binding ElapsedLabel, Mode=OneWay}" />
