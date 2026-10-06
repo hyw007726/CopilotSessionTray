@@ -9,10 +9,14 @@ namespace CopilotSessionTray.App.ViewModels;
 /// </summary>
 /// <remarks>
 /// <b>2026-10-05 (IMPLEMENTATION_PLAN.md §9.6):</b> this enum used to be computed every poll but
-/// never actually read by anything — <c>TrayViewModel.IconBrush</c>/<c>IconGlyph</c>/
-/// <c>WatermarkImageSource</c> each independently reimplemented their own
-/// <c>IsAnyWorking</c>/<c>UnreadCount</c> checks. It's now the single, authoritative source of
-/// truth those all switch over instead. Priority order (highest wins, computed in
+/// never actually read by anything — <c>TrayViewModel</c>'s tray-icon/watermark rendering each
+/// independently reimplemented their own <c>IsAnyWorking</c>/<c>UnreadCount</c> checks. It's now
+/// the single, authoritative source of truth those switch over instead (the actual Win32 tray
+/// icon was redesigned 2026-10-06 to a composited glyph+ring+dot — see
+/// <c>MainWindow.xaml.cs</c>'s <c>ComposeTrayIconBitmap</c> — driven directly off
+/// <c>TrayViewModel.IsAnyWorking</c>/<c>HasUnreadSessions</c> rather than this enum, but
+/// <c>TrayViewModel.WatermarkImageSource</c> — the popup's background art — still switches over
+/// this). Priority order (highest wins, computed in
 /// <c>TrayViewModel.RecomputeAggregateState</c>): <see cref="AttentionNeeded"/> outranks
 /// <see cref="Working"/> — "something finished and you haven't seen it" is more urgent than
 /// "something's just running" — reversing the original priority, where <see cref="Working"/>
@@ -44,8 +48,8 @@ public enum TrayAggregateState
     /// <c>working: false</c> identically (IMPLEMENTATION_PLAN.md §2.3), so confidently flagging
     /// this as urgent was simply wrong. Left in the enum (rather than deleted) specifically so a
     /// future, real distinguishing signal from Copilot CLI (e.g. a genuine "awaiting reply" flag)
-    /// can be wired back in at the same plug-in points (<c>TrayViewModel.IconBrush</c>/
-    /// <c>WatermarkImageSource</c>'s switch arms) without redesigning where it belongs.
+    /// can be wired back in at the same plug-in point (<c>TrayViewModel.WatermarkImageSource</c>'s
+    /// switch arms) without redesigning where it belongs.
     /// </summary>
     WaitingForInput,
 }

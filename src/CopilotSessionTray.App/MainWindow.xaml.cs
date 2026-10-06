@@ -25,15 +25,47 @@ public partial class MainWindow : Window
     private readonly TrayViewModel _viewModel;
 
     /// <summary>
-    /// Reused across every <see cref="UpdateTrayIcon"/> call rather than constructed fresh each
-    /// time — purely to avoid needless allocation; its own property values are overwritten
-    /// in-place on every call, so nothing about reuse affects correctness here.
+    /// The tray icon's constant base artwork — the same gold Guanyin glyph used elsewhere in the
+    /// app (<see cref="TrayViewModel"/>'s watermark images, <see cref="ViewModels.SessionItemViewModel.StatusIconSource"/>),
+    /// loaded once as a GDI+ <see cref="System.Drawing.Bitmap"/> (not a WPF <c>ImageSource</c> —
+    /// <see cref="ComposeTrayIconBitmap"/> draws with <see cref="System.Drawing.Graphics"/>, not
+    /// WPF) from the same embedded <c>pack://</c> resource those other call sites use. Never
+    /// disposed until <see cref="ShutdownTrayIcon"/> — reused as a draw source on every single
+    /// <see cref="UpdateTrayIcon"/>/timer-tick call, same "load once, draw many times" pattern as
+    /// every other cached image asset in this app.
     /// </summary>
-    private readonly GeneratedIconSource _iconGenerator = new()
+    private readonly System.Drawing.Bitmap _glyphBitmap = LoadGlyphBitmap();
+
+    /// <summary>
+    /// Drives the "working" ring's rotation (2026-10-06, user request: "a spinning circle
+    /// surrounding the golden guanyin glyph" for a working session). Ticks only while
+    /// <see cref="TrayViewModel.IsAnyWorking"/> is true — started/stopped in
+    /// <see cref="OnViewModelPropertyChangedForTrayIcon"/> and <see cref="InitializeTrayIcon"/> —
+    /// rather than running indefinitely, so an idle app never spends any CPU/battery on an
+    /// animation nobody can see.
+    /// </summary>
+    private readonly DispatcherTimer _spinTimer;
+
+    /// <summary>Current rotation of the working-ring's arc, in degrees. Reset to 0 every time the ring starts (see <see cref="OnViewModelPropertyChangedForTrayIcon"/>) purely so each spin-up looks the same, not because a continuing angle would be wrong.</summary>
+    private double _spinAngleDegrees;
+
+    /// <summary>
+    /// The native icon handle (HICON) currently assigned to <see cref="TrayIcon"/>'s <c>Icon</c>
+    /// property, tracked so <see cref="UpdateTrayIcon"/> can destroy it itself once replaced — see
+    /// that method's own remarks for why this manual tracking is necessary at all (a real,
+    /// confirmed handle-leak gotcha in both .NET and H.NotifyIcon, not a hypothetical one).
+    /// <see cref="IntPtr.Zero"/> until the very first call.
+    /// </summary>
+    private IntPtr _currentTrayIconHandle;
+
+    private static System.Drawing.Bitmap LoadGlyphBitmap()
     {
-        Foreground = System.Windows.Media.Brushes.White,
-        FontWeight = FontWeights.Bold,
-    };
+        var uri = new Uri("pack://application:,,,/Assets/TrayIcon.Watermark.WaitingForInput.png");
+        var resourceInfo = Application.GetResourceStream(uri)
+            ?? throw new InvalidOperationException($"Tray icon glyph asset not found: {uri}");
+        using var stream = resourceInfo.Stream;
+        return new System.Drawing.Bitmap(stream);
+    }
 
     public MainWindow(TrayViewModel viewModel, NotificationService notificationService)
     {
@@ -48,15 +80,40 @@ public partial class MainWindow : Window
             TogglePopup();
         };
 
+        // ~8fps (120ms/tick): deliberately coarse, not 60fps-smooth — a 128px source canvas
+        // rendered down to a 16-32px taskbar icon doesn't benefit from finer-grained timing, and
+        // every tick means one more icon regeneration (see UpdateTrayIcon's remarks). 10
+        // degrees/tick -> a full revolution every 36 ticks * 120ms = 4.3s (2026-10-06, slowed down
+        // from an initial 24 degrees/tick/~1.8s per the user's "make it spin slower" feedback) —
+        // same update frequency/resource cost as before, just a smaller step each time, which also
+        // makes the gradient (see ComposeTrayIconBitmap's remarks) read more smoothly besides.
+        _spinTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
+        _spinTimer.Tick += (_, _) =>
+        {
+            _spinAngleDegrees = (_spinAngleDegrees + 10) % 360;
+            UpdateTrayIcon();
+        };
+
         // See UpdateTrayIcon's own doc comment for why this replaces an IconSource XAML binding.
         _viewModel.PropertyChanged += OnViewModelPropertyChangedForTrayIcon;
     }
 
     private void OnViewModelPropertyChangedForTrayIcon(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(TrayViewModel.IconGlyph) or nameof(TrayViewModel.IconBrush)
-            or nameof(TrayViewModel.IconBackgroundSource)
-            or nameof(TrayViewModel.IconTextMargin) or nameof(TrayViewModel.IconFontSize))
+        if (e.PropertyName == nameof(TrayViewModel.IsAnyWorking))
+        {
+            if (_viewModel.IsAnyWorking)
+            {
+                _spinAngleDegrees = 0;
+                _spinTimer.Start();
+            }
+            else
+            {
+                _spinTimer.Stop();
+            }
+        }
+
+        if (e.PropertyName is nameof(TrayViewModel.IsAnyWorking) or nameof(TrayViewModel.HasUnreadSessions))
         {
             UpdateTrayIcon();
         }
@@ -68,6 +125,7 @@ public partial class MainWindow : Window
     /// longer bound at all; see <c>MainWindow.xaml</c>'s own comment at the <c>TaskbarIcon</c>).
     /// </summary>
     /// <remarks>
+    /// <para>
     /// <b>Why this is actually race-free, not just differently risky</b>
     /// (IMPLEMENTATION_PLAN.md §9.6 follow-up): binding <c>IconSource</c> to a
     /// <c>GeneratedIconSource</c> makes <c>TaskbarIcon</c> itself subscribe to that source's
@@ -78,19 +136,164 @@ public partial class MainWindow : Window
     /// ordinary rapid clicks on "Cycle demo data", not only the since-removed continuous flash
     /// timer this was first found with) race on the same non-thread-safe GDI+
     /// <c>Bitmap</c>/<c>Graphics</c> objects. This method instead calls the *synchronous*
-    /// <c>GeneratedIconSource.ToIcon()</c> directly, on the UI thread, exactly once per real
-    /// property change (filtered in <see cref="OnViewModelPropertyChangedForTrayIcon"/>) — nothing
-    /// here is <c>async</c>/fire-and-forget, so a second call can only ever begin after the first
-    /// one has fully returned; overlapping calls are structurally impossible, not just unlikely.
+    /// <see cref="ComposeTrayIconBitmap"/> directly, on the UI thread, exactly once per real
+    /// property change or spin-timer tick (both only ever dispatched on the UI thread, so they
+    /// can never overlap each other either) — nothing here is <c>async</c>/fire-and-forget, so a
+    /// second call can only ever begin after the first one has fully returned; overlapping calls
+    /// are structurally impossible, not just unlikely. This remains true with the 2026-10-06
+    /// glyph+ring+dot redesign's spin timer added — a timer merely means *more frequent* calls to
+    /// this same already-safe method, not a new source of concurrency.
+    /// </para>
+    /// <para>
+    /// <b>A second, independent bug found while researching this redesign: every past icon update
+    /// has leaked a native GDI icon handle (HICON)</b> — confirmed directly from both .NET's own
+    /// source (<c>System.Drawing.Icon.FromHandle</c> always constructs a <em>non-owning</em>
+    /// wrapper; its <c>Dispose()</c> only calls the real <c>DestroyIcon</c> Win32 API if the
+    /// wrapper <em>owns</em> the handle, which a <c>FromHandle</c>-created one never does) and
+    /// H.NotifyIcon's own source (<c>TaskbarIcon</c>'s <c>Icon</c> property setter dutifully calls
+    /// <c>oldValue?.Dispose()</c> on every change — but since that <c>Icon</c> was always created
+    /// via the same non-owning <c>FromHandle</c> pattern, that <c>Dispose()</c> is a no-op at the
+    /// native level). The old <c>GeneratedIconSource.ToIcon()</c> call site had exactly this same
+    /// problem, just never surfaced: at the old, rare "only on a real state transition" update
+    /// frequency, leaking one HICON per update was slow enough to be practically unnoticeable; a
+    /// ~8/sec spin-timer tick rate would have exhausted this process's GDI handle budget (a
+    /// few thousand, by default) within minutes. Fixed by tracking the native handle
+    /// (<see cref="_currentTrayIconHandle"/>) ourselves and destroying the <em>previous</em> one
+    /// manually, immediately after the shell has already been told about the new one — safe
+    /// because <c>Shell_NotifyIcon</c> (which <c>TrayIcon.Icon</c>'s setter calls into
+    /// synchronously) copies the icon's bitmap data internally, so the handle we created it from
+    /// is never needed again after that call returns. Verified via an extended soak test
+    /// monitoring this process's real GDI object count (<c>GetGuiResources</c>) across several
+    /// minutes of continuous spinning — see IMPLEMENTATION_PLAN.md for the numbers.
+    /// </para>
     /// </remarks>
     private void UpdateTrayIcon()
     {
-        _iconGenerator.Text = _viewModel.IconGlyph;
-        _iconGenerator.Background = _viewModel.IconBrush;
-        _iconGenerator.BackgroundSource = _viewModel.IconBackgroundSource;
-        _iconGenerator.FontSize = _viewModel.IconFontSize;
-        _iconGenerator.TextMargin = _viewModel.IconTextMargin;
-        TrayIcon.Icon = _iconGenerator.ToIcon();
+        using var bitmap = ComposeTrayIconBitmap(_viewModel.IsAnyWorking, _viewModel.HasUnreadSessions, _spinAngleDegrees);
+        var newHandle = bitmap.GetHicon();
+        TrayIcon.Icon = System.Drawing.Icon.FromHandle(newHandle); // Shell_NotifyIcon(NIM_MODIFY) happens synchronously inside this setter.
+
+        if (_currentTrayIconHandle != IntPtr.Zero)
+        {
+            // Only safe to destroy *after* the line above - see this method's own remarks.
+            NativeMethods.DestroyIcon(_currentTrayIconHandle);
+        }
+        _currentTrayIconHandle = newHandle;
+    }
+
+    /// <summary>
+    /// Composites the tray icon from scratch every call: the constant gold glyph
+    /// (<see cref="_glyphBitmap"/>) as a base, an optional rotating gold-to-white gradient ring
+    /// around it while any session is working, and an optional small red dot overlay at the
+    /// bottom-right while any session is unread (2026-10-06, user request — replacing the flat
+    /// green/orange/gray circle + unread-count/working-dot text glyph this app used until today:
+    /// "no numbers are needed as they are too small to read" at tray-icon size, and the gold glyph
+    /// can simply always be shown with small overlays on top instead of swapping it out for a flat
+    /// color; the ring itself was originally a flat green, then changed the same day to this
+    /// gold-to-white gradient per further feedback, so it reads as part of the same gold theme as
+    /// the glyph it surrounds rather than borrowing the app's unrelated green "working" color).
+    /// The two overlays are independent and can both show at once (drawn glyph, then ring, then
+    /// dot, so the dot always stays visibly on top of the ring regardless of its current rotation)
+    /// — "working" and "has something unread" are both real, simultaneously-true facts about
+    /// different sessions, so there's no reason one should hide the other the way the old flat,
+    /// single-color icon was forced to pick only one.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Caller (<see cref="UpdateTrayIcon"/>) is responsible for disposing the returned
+    /// <see cref="System.Drawing.Bitmap"/> and for destroying the HICON extracted from it — this
+    /// method itself only disposes the GDI+ objects (<see cref="System.Drawing.Graphics"/>,
+    /// pens/brushes) it creates internally for a single draw pass.
+    /// </para>
+    /// <para>
+    /// <b>Why the ring is drawn as many small arc segments instead of one <c>DrawArc</c> call</b>:
+    /// GDI+ has no built-in way to paint a gradient *along the length of a curved stroke* (a
+    /// <see cref="System.Drawing.Drawing2D.LinearGradientBrush"/> paints across a flat 2D area in
+    /// screen-space, not along an arc's own path, and would look visually inconsistent as the ring
+    /// rotates underneath a screen-space-fixed gradient). Approximating a stroke gradient by
+    /// drawing many short, individually-colored segments — interpolating from gold at the ring's
+    /// leading edge to white at its trailing edge — is the standard technique for this in GDI+.
+    /// <see cref="RingSegmentCount"/> short segments, each slightly overlapping its neighbor
+    /// (<see cref="RingSegmentOverlapDegrees"/>) to hide any seam from floating-point rounding
+    /// between adjacent arcs, is fine-grained enough to look smooth at this icon's small size —
+    /// confirmed by rendering and visually inspecting the result, not just assumed.
+    /// </para>
+    /// </remarks>
+    private System.Drawing.Bitmap ComposeTrayIconBitmap(bool isWorking, bool hasUnread, double spinAngleDegrees)
+    {
+        const int size = 128; // matches the previous GeneratedIconSource.Size default/convention.
+        var bitmap = new System.Drawing.Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+
+        using var graphics = System.Drawing.Graphics.FromImage(bitmap);
+        graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+        graphics.Clear(System.Drawing.Color.Transparent);
+
+        const float glyphMargin = size * 0.12f;
+        var glyphRect = new System.Drawing.RectangleF(glyphMargin, glyphMargin, size - glyphMargin * 2, size - glyphMargin * 2);
+        graphics.DrawImage(_glyphBitmap, glyphRect);
+
+        if (isWorking)
+        {
+            const float ringMargin = size * 0.045f;
+            var ringRect = new System.Drawing.RectangleF(ringMargin, ringMargin, size - ringMargin * 2, size - ringMargin * 2);
+            const float segmentSweep = RingSweepDegrees / RingSegmentCount;
+
+            for (var i = 0; i < RingSegmentCount; i++)
+            {
+                var t = (float)i / (RingSegmentCount - 1); // 0 at the leading edge (gold) -> 1 at the trailing edge (white).
+                var segmentColor = LerpColor(RingGoldColor, System.Drawing.Color.White, t);
+                using var segmentPen = new System.Drawing.Pen(segmentColor, size * 0.085f)
+                {
+                    StartCap = System.Drawing.Drawing2D.LineCap.Round,
+                    EndCap = System.Drawing.Drawing2D.LineCap.Round,
+                };
+                var segmentStart = (float)spinAngleDegrees + i * segmentSweep;
+                graphics.DrawArc(segmentPen, ringRect, segmentStart, segmentSweep + RingSegmentOverlapDegrees);
+            }
+        }
+
+        if (hasUnread)
+        {
+            const float dotSize = size * 0.26f;
+            const float dotInset = size * 0.02f;
+            var dotRect = new System.Drawing.RectangleF(size - dotSize - dotInset, size - dotSize - dotInset, dotSize, dotSize);
+            using var dotOutlinePen = new System.Drawing.Pen(System.Drawing.Color.White, size * 0.02f);
+            // #F44336 matches the per-session unread dot's own Fill in MainWindow.xaml - same red everywhere this app marks "unread".
+            using var dotBrush = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(244, 67, 54));
+            graphics.FillEllipse(dotBrush, dotRect);
+            graphics.DrawEllipse(dotOutlinePen, dotRect);
+        }
+
+        return bitmap;
+    }
+
+    /// <summary>Total sweep of the working ring's visible arc, in degrees — see <see cref="ComposeTrayIconBitmap"/>.</summary>
+    private const float RingSweepDegrees = 110f;
+
+    /// <summary>
+    /// How many short, individually-colored arcs <see cref="ComposeTrayIconBitmap"/> draws to
+    /// approximate a gold-to-white gradient along the ring's length — see that method's own
+    /// remarks for why this many small segments, rather than one <c>DrawArc</c> call, is
+    /// necessary at all.
+    /// </summary>
+    private const int RingSegmentCount = 24;
+
+    /// <summary>Extra overlap between adjacent ring segments, in degrees, purely to hide any seam from floating-point rounding between them.</summary>
+    private const float RingSegmentOverlapDegrees = 0.6f;
+
+    /// <summary>The "gold" end of the working ring's gradient — the exact same gold as the glyph it surrounds (<c>#DAA520</c>, sampled from <c>TrayIcon.Watermark.WaitingForInput.png</c>), not GDI+'s own slightly different built-in <see cref="System.Drawing.Color.Gold"/>, so the ring reads as part of the same gold theme rather than a second, subtly different gold.</summary>
+    private static readonly System.Drawing.Color RingGoldColor = System.Drawing.Color.FromArgb(0xDA, 0xA5, 0x20);
+
+    /// <summary>Linear interpolation between two colors (including alpha) at <paramref name="t"/> ∈ [0, 1] — used to approximate a gradient along the working ring's arc; see <see cref="ComposeTrayIconBitmap"/>'s remarks.</summary>
+    private static System.Drawing.Color LerpColor(System.Drawing.Color from, System.Drawing.Color to, float t)
+    {
+        t = Math.Clamp(t, 0f, 1f);
+        return System.Drawing.Color.FromArgb(
+            (int)(from.A + (to.A - from.A) * t),
+            (int)(from.R + (to.R - from.R) * t),
+            (int)(from.G + (to.G - from.G) * t),
+            (int)(from.B + (to.B - from.B) * t));
     }
 
     /// <summary>
@@ -103,13 +306,39 @@ public partial class MainWindow : Window
     public void InitializeTrayIcon()
     {
         TrayIcon.ForceCreate();
+
+        // The spin timer is otherwise only started in response to a *change* in IsAnyWorking
+        // (OnViewModelPropertyChangedForTrayIcon) - if a session is already working the moment
+        // this app starts up (e.g. the real "live" scenario, not just a demo), there's no change
+        // event to react to, so it needs this one explicit check here too.
+        if (_viewModel.IsAnyWorking)
+        {
+            _spinTimer.Start();
+        }
+
         UpdateTrayIcon(); // IconSource is no longer bound (see its own comment), so the icon needs
                           // an explicit first render — nothing will "change" to trigger one otherwise.
         _notificationService.AttachTrayIcon(TrayIcon);
     }
 
     /// <summary>Releases the tray icon's native resources on app shutdown.</summary>
-    public void ShutdownTrayIcon() => TrayIcon.Dispose();
+    public void ShutdownTrayIcon()
+    {
+        _spinTimer.Stop();
+        TrayIcon.Dispose();
+
+        // TrayIcon.Dispose() above also disposes its own Icon property internally, but per
+        // UpdateTrayIcon's own remarks that's a no-op at the native level for a FromHandle-created
+        // icon - this is the real cleanup. Technically moot in practice (the whole process is
+        // about to exit, and Windows reclaims every GDI handle on process exit regardless), but
+        // correct and cheap, so there's no reason not to do it properly.
+        if (_currentTrayIconHandle != IntPtr.Zero)
+        {
+            NativeMethods.DestroyIcon(_currentTrayIconHandle);
+            _currentTrayIconHandle = IntPtr.Zero;
+        }
+        _glyphBitmap.Dispose();
+    }
 
     protected override void OnClosing(CancelEventArgs e)
     {
@@ -179,5 +408,16 @@ public partial class MainWindow : Window
         {
             ResumeMenuHelper.Show(button, session, viewModel);
         }
+    }
+
+    /// <summary>
+    /// The one Win32 API this app needs that neither .NET nor H.NotifyIcon actually calls for us —
+    /// see <see cref="UpdateTrayIcon"/>'s remarks for the full story of why that's a real, not
+    /// hypothetical, handle leak.
+    /// </summary>
+    private static class NativeMethods
+    {
+        [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+        public static extern bool DestroyIcon(IntPtr hIcon);
     }
 }

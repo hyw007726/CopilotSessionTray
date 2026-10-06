@@ -19,8 +19,9 @@ public partial class App : Application
 
     /// <summary>
     /// Hard ceiling on consecutive dispatcher-exception dialogs (IMPLEMENTATION_PLAN.md §9.5) —
-    /// a real crash loop (a recurring GDI+ race in H.NotifyIcon; see <c>TrayViewModel.IconBrush</c>'s
-    /// doc comment) showed this handler can itself become the problem: each recurrence gets
+    /// a real crash loop (a recurring GDI+ race in H.NotifyIcon; see IMPLEMENTATION_PLAN.md
+    /// §9.5/§9.6 and <c>MainWindow.xaml.cs</c>'s own tray-icon doc comments) showed this handler
+    /// can itself become the problem: each recurrence gets
     /// "handled" and the app survives, but a new dialog pops up again and again faster than a
     /// user can dismiss them, making the app feel completely unresponsive/unclosable even though
     /// it's technically still running. Once this many fire with no clean gap between them (see

@@ -137,9 +137,13 @@ public sealed partial class SessionItemViewModel : ObservableObject
     /// <summary>
     /// Color for this row's status dot and status text (2026-10-05: also now the
     /// <c>TextBlock.Foreground</c> for the status/elapsed line in <c>MainWindow.xaml</c>, not just
-    /// the small dot — see IMPLEMENTATION_PLAN.md §9.6). Kept in sync with the tray icon's own
-    /// palette (<c>TrayViewModel.IconBrush</c>): green=working, orange=finished-and-unread,
-    /// gray=idle/closed/acknowledged.
+    /// the small dot — see IMPLEMENTATION_PLAN.md §9.6). This per-row flat-color palette
+    /// (green=working, orange=finished-and-unread, gray=idle/closed/acknowledged) is this app's
+    /// own established state palette; the actual Win32 tray icon no longer uses a matching flat
+    /// color itself as of the 2026-10-06 glyph+ring+dot redesign (see <c>MainWindow.xaml.cs</c>'s
+    /// <c>ComposeTrayIconBitmap</c>), but still uses the same green for its spinning "working"
+    /// ring and the same red for its "unread" dot overlay, so the palette stays consistent across
+    /// both surfaces even though the tray icon's own shape changed.
     /// <see cref="SessionStatus.WaitingForInput"/> renders gray (not a distinct color) — see
     /// <see cref="StatusLabelFor"/>'s doc comment for why this status can't be confidently
     /// colorized/labeled any more specifically today.
