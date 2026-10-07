@@ -41,8 +41,7 @@
                         ToolTipText="{Binding ToolTipText}"
                         MenuActivation="RightClick"
                         TrayLeftMouseUp="TrayIcon_TrayLeftMouseUp"
-                        TrayLeftMouseDoubleClick="TrayIcon_TrayLeftMouseDoubleClick"
-                        TrayBalloonTipClicked="TrayIcon_TrayBalloonTipClicked">
+                        TrayLeftMouseDoubleClick="TrayIcon_TrayLeftMouseDoubleClick">
             <!--
                 No IconSource binding here (2026-10-05, IMPLEMENTATION_PLAN.md §9.6 follow-up) —
                 deliberately removed, not merely left unused. A GeneratedIconSource bound via
@@ -68,7 +67,6 @@
                     <MenuItem Header="Show sessions" Click="ShowSessions_Click" />
                     <MenuItem Header="Start new task…" Command="{Binding StartYoloTaskCommand}" />
                     <MenuItem Header="Session history…" Command="{Binding ShowSessionHistoryCommand}" />
-                    <MenuItem Header="Mark all as read" Command="{Binding MarkAllReadCommand}" />
                     <MenuItem Header="Cycle demo data" Command="{Binding CycleDemoScenarioCommand}" />
                     <Separator />
                     <MenuItem Header="Mute notifications" IsCheckable="True" IsChecked="{Binding IsMuted, Mode=TwoWay}" />
@@ -92,8 +90,8 @@
         <!--
             Watermark (2026-10-02, see IMPLEMENTATION_PLAN.md §9.4/§9.5) — the same Guanyin
             artwork as the tray icon's own glyph (though the tray icon itself moved to a
-            composited glyph+ring+dot on 2026-10-06 — see MainWindow.xaml.cs's
-            ComposeTrayIconBitmap — this watermark's own green/orange/gray full-image swap via
+            composited glyph+ring on 2026-10-06 — see MainWindow.xaml.cs's
+            ComposeTrayIconBitmap — this watermark's own green/gold/gray full-image swap via
             TrayViewModel.WatermarkImageSource is unchanged), purely decorative/branding behind the
             session list and empty-state text. Declared before (so behind, in z-order) the
             ListBox/empty-state TextBlock below, both of which keep a transparent background
@@ -129,7 +127,6 @@
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
 
                             <Ellipse Grid.Row="0" Grid.Column="0"
@@ -166,12 +163,6 @@
                                 </TextBlock>
                             </StackPanel>
 
-                            <Ellipse Grid.Row="0" Grid.Column="2"
-                                     Width="8" Height="8"
-                                     Fill="#F44336"
-                                     VerticalAlignment="Top"
-                                     Visibility="{Binding UnreadDotVisibility}" />
-
                             <!--
                                 Per-session actions. Commands live on TrayViewModel (the
                                 Window's DataContext), not on this row's own
@@ -179,16 +170,10 @@
                                 ElementName back to the root Window, passing this row's item
                                 as CommandParameter.
                             -->
-                            <StackPanel Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2"
+                            <StackPanel Grid.Row="1" Grid.Column="1"
                                         Orientation="Horizontal"
                                         HorizontalAlignment="Right"
                                         Margin="0,4,0,0">
-                                <Button Padding="5,2" Margin="4,0,0,0" FontSize="10"
-                                        Content="✓ Read"
-                                        ToolTip="Mark this session as read"
-                                        Visibility="{Binding UnreadDotVisibility}"
-                                        Command="{Binding DataContext.MarkSessionReadCommand, ElementName=RootWindow}"
-                                        CommandParameter="{Binding}" />
                                 <Button Padding="5,2" Margin="4,0,0,0" FontSize="10"
                                         Content="⤴ Resume"
                                         ToolTip="Choose how to resume this session"
@@ -224,8 +209,7 @@
                     Orientation="Horizontal"
                     HorizontalAlignment="Right"
                     Margin="8">
-            <Button Margin="0,0,8,0" Padding="8,4" Content="Cycle demo data" Command="{Binding CycleDemoScenarioCommand}" />
-            <Button Padding="8,4" Content="Mark all read" Command="{Binding MarkAllReadCommand}" />
+            <Button Padding="8,4" Content="Cycle demo data" Command="{Binding CycleDemoScenarioCommand}" />
         </StackPanel>
     </Grid>
 </Window>

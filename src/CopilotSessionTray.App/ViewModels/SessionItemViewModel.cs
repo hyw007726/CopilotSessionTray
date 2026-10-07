@@ -22,7 +22,6 @@ public sealed partial class SessionItemViewModel : ObservableObject
         SessionStatus status,
         string detail,
         TimeSpan elapsed,
-        bool isUnread,
         string? workingDirectory = null,
         string? realSummary = null)
     {
@@ -31,7 +30,6 @@ public sealed partial class SessionItemViewModel : ObservableObject
         _status = status;
         _detail = detail;
         _elapsed = elapsed;
-        _isUnread = isUnread;
         WorkingDirectory = workingDirectory;
 
         // realSummary is the real Copilot CLI checkpoint overview/session title text resolved by
@@ -95,13 +93,6 @@ public sealed partial class SessionItemViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(ElapsedLabel))]
     private TimeSpan _elapsed;
 
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(UnreadDotVisibility))]
-    [NotifyPropertyChangedFor(nameof(StatusBrush))]
-    [NotifyPropertyChangedFor(nameof(StatusDotVisibility))]
-    [NotifyPropertyChangedFor(nameof(StatusIconVisibility))]
-    private bool _isUnread;
-
     public string StatusLabel => StatusLabelFor(Status);
 
     /// <summary>
@@ -138,47 +129,39 @@ public sealed partial class SessionItemViewModel : ObservableObject
     /// Color for this row's status dot and status text (2026-10-05: also now the
     /// <c>TextBlock.Foreground</c> for the status/elapsed line in <c>MainWindow.xaml</c>, not just
     /// the small dot — see IMPLEMENTATION_PLAN.md §9.6). This per-row flat-color palette
-    /// (green=working, orange=finished-and-unread, gray=idle/closed/acknowledged) is this app's
-    /// own established state palette; the actual Win32 tray icon no longer uses a matching flat
-    /// color itself as of the 2026-10-06 glyph+ring+dot redesign (see <c>MainWindow.xaml.cs</c>'s
+    /// (green=working, gray=idle/finished/closed) is this app's own established state palette;
+    /// the actual Win32 tray icon no longer uses a matching flat color itself as of the
+    /// 2026-10-06 glyph+ring+dot redesign (see <c>MainWindow.xaml.cs</c>'s
     /// <c>ComposeTrayIconBitmap</c>), but still uses the same green for its spinning "working"
-    /// ring and the same red for its "unread" dot overlay, so the palette stays consistent across
-    /// both surfaces even though the tray icon's own shape changed.
+    /// ring, so the palette stays consistent across both surfaces even though the tray icon's
+    /// own shape changed.
     /// <see cref="SessionStatus.WaitingForInput"/> renders gray (not a distinct color) — see
     /// <see cref="StatusLabelFor"/>'s doc comment for why this status can't be confidently
     /// colorized/labeled any more specifically today.
     /// </summary>
     /// <remarks>
-    /// <see cref="SessionStatus.Finished"/> only renders <c>OrangeRed</c> while <see
-    /// cref="IsUnread"/> is still true (2026-10-05 fix) — previously this stayed orange-red
-    /// forever, even after clicking "Read", because this switch only considered <see
-    /// cref="Status"/>. The orange-red color exists to signal "fresh, needs your attention";
-    /// once acknowledged via "Read" (<c>TrayViewModel.MarkSessionRead</c>, which only ever
-    /// flips <see cref="IsUnread"/>, never <see cref="Status"/>), that urgency is gone even
-    /// though the row's status label still accurately says "Finished" — so the color drops to
-    /// the same neutral gray as Idle, rather than keeping a claim ("still needs attention")
-    /// that's no longer true.
+    /// <see cref="SessionStatus.Finished"/> used to render <c>OrangeRed</c> while an
+    /// <c>IsUnread</c> flag was still true, dropping to gray once "read" — removed 2026-10-07
+    /// (the user: "I don't really need the red dot behaviour in the tray icon or unread-related
+    /// features", since the dismissable balloon notification already serves that acknowledgment
+    /// purpose). <see cref="SessionStatus.Finished"/> is now unconditionally gray, same as Idle.
     /// </remarks>
     public Brush StatusBrush => Status switch
     {
         SessionStatus.Working => Brushes.MediumSeaGreen,
-        SessionStatus.Finished when IsUnread => Brushes.OrangeRed,
         SessionStatus.Finished => Brushes.Gray,
         SessionStatus.WaitingForInput => Brushes.Gray,
         SessionStatus.Closed => Brushes.Gray,
         _ => Brushes.Gray,
     };
 
-    public System.Windows.Visibility UnreadDotVisibility =>
-        IsUnread ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
-
     /// <summary>
     /// Plain colored dot used for every status except the "idle-like, not actively alerting"
-    /// ones — <see cref="SessionStatus.WaitingForInput"/> ("Idle") and a read
-    /// <see cref="SessionStatus.Finished"/> row — which use <see cref="StatusIconSource"/>/
+    /// ones — <see cref="SessionStatus.WaitingForInput"/> ("Idle") and <see
+    /// cref="SessionStatus.Finished"/> — which use <see cref="StatusIconSource"/>/
     /// <see cref="StatusIconVisibility"/> instead (2026-10-05, user request: "use the guanyin svg
     /// in a golden color" in place of the gray dot for Idle rows; extended the same day to
-    /// read-Finished rows too — see <see cref="IsIdleLike"/>'s own doc comment for why). Collapsed,
+    /// Finished rows too — see <see cref="IsIdleLike"/>'s own doc comment for why). Collapsed,
     /// not just zero-size, so it never captures layout space or hit-testing it isn't needed for.
     /// </summary>
     public System.Windows.Visibility StatusDotVisibility =>
@@ -194,22 +177,15 @@ public sealed partial class SessionItemViewModel : ObservableObject
     /// gray <em>except</em> <see cref="SessionStatus.Closed"/>.
     /// </summary>
     /// <remarks>
-    /// Added 2026-10-05, after the user pushed back on the read-Finished → gray change from
-    /// earlier the same day: "when I click read, it becomes gray from red, but I think the
-    /// session is still idle and not closed." Before this, a read <c>Finished</c> row used the
-    /// same plain gray <c>Ellipse</c> dot as a genuinely <see cref="SessionStatus.Closed"/>
-    /// session — visually conflating two different facts: "this process has actually ended"
-    /// (<c>Closed</c>) versus "this finished a turn, you've seen it, nothing further is known"
-    /// (read <c>Finished</c>, which is substantively the same uncertain, non-alerting situation
-    /// as <c>WaitingForInput</c>/"Idle" — see that status's own doc comments on
-    /// <c>TrayAggregateState.WaitingForInput</c> for why this app can't claim anything more
-    /// specific). Giving both the same gold glyph (while leaving <c>Closed</c> with the plain
-    /// dot) makes that distinction visible instead of silently erasing it: "idle-looking, still
-    /// here" vs. "actually closed" are no longer the same gray circle. <see cref="StatusLabel"/>
-    /// still correctly says "Finished", not "Idle", for this case — only the dot/icon changes,
-    /// not the (accurate, permanent) text.
+    /// Originally added 2026-10-05 to distinguish a read <c>Finished</c> row (idle-looking, still
+    /// open) from a genuinely <see cref="SessionStatus.Closed"/> session (process actually ended)
+    /// — conflating the two with the same plain gray dot would have erased that distinction. Since
+    /// the 2026-10-07 removal of the separate "unread"/"read" tracking (see <see
+    /// cref="StatusBrush"/>'s remarks), every <c>Finished</c> row is idle-like unconditionally,
+    /// not just read ones — <see cref="StatusLabel"/> still correctly says "Finished", not "Idle",
+    /// for this case; only the dot/icon changes, not the (accurate, permanent) text.
     /// </remarks>
-    private bool IsIdleLike => Status == SessionStatus.WaitingForInput || (Status == SessionStatus.Finished && !IsUnread);
+    public bool IsIdleLike => Status == SessionStatus.WaitingForInput || Status == SessionStatus.Finished;
 
     /// <summary>
     /// The small gold bodhisattva glyph shown in place of the status dot for idle-like rows (see

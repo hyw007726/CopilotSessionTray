@@ -64,7 +64,46 @@ public partial class MainWindow : Window
         var resourceInfo = Application.GetResourceStream(uri)
             ?? throw new InvalidOperationException($"Tray icon glyph asset not found: {uri}");
         using var stream = resourceInfo.Stream;
-        return new System.Drawing.Bitmap(stream);
+        using var original = new System.Drawing.Bitmap(stream);
+        return CropToVisibleContent(original);
+    }
+
+    /// <summary>
+    /// Crops away the fully-transparent border around the figure in the baked glyph PNG (measured
+    /// ~5-10% per side — the artwork itself doesn't quite reach the edges of its own 512x512
+    /// canvas) before it's ever drawn — otherwise that baked-in padding compounds with
+    /// <see cref="ComposeTrayIconBitmap"/>'s own margin, making the figure noticeably smaller
+    /// than it needs to be (2026-10-07, user request: "make the icon... as large as possible,
+    /// right now it seems smaller compared to other tray icons"). Runs once at startup (this
+    /// bitmap is cached and reused for every draw — see <see cref="_glyphBitmap"/>'s own doc
+    /// comment), so the plain, safe <see cref="System.Drawing.Bitmap.GetPixel"/> scan is fine
+    /// despite not being the fastest way to inspect pixels — no need for `unsafe`/`LockBits` for
+    /// a one-time cost.
+    /// </summary>
+    private static System.Drawing.Bitmap CropToVisibleContent(System.Drawing.Bitmap source)
+    {
+        int minX = source.Width, minY = source.Height, maxX = -1, maxY = -1;
+        for (var y = 0; y < source.Height; y++)
+        {
+            for (var x = 0; x < source.Width; x++)
+            {
+                if (source.GetPixel(x, y).A > 10)
+                {
+                    if (x < minX) minX = x;
+                    if (x > maxX) maxX = x;
+                    if (y < minY) minY = y;
+                    if (y > maxY) maxY = y;
+                }
+            }
+        }
+
+        if (maxX < minX || maxY < minY)
+        {
+            return (System.Drawing.Bitmap)source.Clone(); // defensive only - shouldn't happen for real art.
+        }
+
+        var cropRect = new System.Drawing.Rectangle(minX, minY, maxX - minX + 1, maxY - minY + 1);
+        return source.Clone(cropRect, source.PixelFormat);
     }
 
     public MainWindow(TrayViewModel viewModel, NotificationService notificationService)
@@ -111,10 +150,7 @@ public partial class MainWindow : Window
             {
                 _spinTimer.Stop();
             }
-        }
 
-        if (e.PropertyName is nameof(TrayViewModel.IsAnyWorking) or nameof(TrayViewModel.HasUnreadSessions))
-        {
             UpdateTrayIcon();
         }
     }
@@ -169,7 +205,7 @@ public partial class MainWindow : Window
     /// </remarks>
     private void UpdateTrayIcon()
     {
-        using var bitmap = ComposeTrayIconBitmap(_viewModel.IsAnyWorking, _viewModel.HasUnreadSessions, _spinAngleDegrees);
+        using var bitmap = ComposeTrayIconBitmap(_viewModel.IsAnyWorking, _spinAngleDegrees);
         var newHandle = bitmap.GetHicon();
         TrayIcon.Icon = System.Drawing.Icon.FromHandle(newHandle); // Shell_NotifyIcon(NIM_MODIFY) happens synchronously inside this setter.
 
@@ -182,21 +218,20 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Composites the tray icon from scratch every call: the constant gold glyph
-    /// (<see cref="_glyphBitmap"/>) as a base, an optional rotating gold-to-white gradient ring
-    /// around it while any session is working, and an optional small red dot overlay at the
-    /// bottom-right while any session is unread (2026-10-06, user request — replacing the flat
-    /// green/orange/gray circle + unread-count/working-dot text glyph this app used until today:
-    /// "no numbers are needed as they are too small to read" at tray-icon size, and the gold glyph
-    /// can simply always be shown with small overlays on top instead of swapping it out for a flat
-    /// color; the ring itself was originally a flat green, then changed the same day to this
-    /// gold-to-white gradient per further feedback, so it reads as part of the same gold theme as
-    /// the glyph it surrounds rather than borrowing the app's unrelated green "working" color).
-    /// The two overlays are independent and can both show at once (drawn glyph, then ring, then
-    /// dot, so the dot always stays visibly on top of the ring regardless of its current rotation)
-    /// — "working" and "has something unread" are both real, simultaneously-true facts about
-    /// different sessions, so there's no reason one should hide the other the way the old flat,
-    /// single-color icon was forced to pick only one.
+    /// Composites the tray icon from scratch every call: an optional rotating gold-to-white
+    /// gradient ring drawn first (as a background "halo"), the constant gold glyph
+    /// (<see cref="_glyphBitmap"/>) drawn on top of it while any session is working (2026-10-06,
+    /// user request — replacing the flat green/orange/gray circle + unread-count/working-dot text
+    /// glyph this app used until then: "no numbers are needed as they are too small to read" at
+    /// tray-icon size, and the gold glyph can simply always be shown with a ring overlay on top
+    /// instead of swapping it out for a flat color; the ring itself was originally a flat green,
+    /// then changed the same day to this gold-to-white gradient per further feedback, so it reads
+    /// as part of the same gold theme as the glyph it surrounds rather than borrowing the app's
+    /// unrelated green "working" color). The ring is drawn *behind*, not after, the glyph — see
+    /// this method's own remarks for why (2026-10-07 follow-up). A separate small red "unread" dot
+    /// overlay used to be drawn last, on top of everything — removed 2026-10-07 (the user: "I
+    /// don't really need the red dot behaviour in the tray icon or unread-related features", since
+    /// the dismissable balloon notification already serves that acknowledgment purpose).
     /// </summary>
     /// <remarks>
     /// <para>
@@ -219,7 +254,7 @@ public partial class MainWindow : Window
     /// confirmed by rendering and visually inspecting the result, not just assumed.
     /// </para>
     /// </remarks>
-    private System.Drawing.Bitmap ComposeTrayIconBitmap(bool isWorking, bool hasUnread, double spinAngleDegrees)
+    private System.Drawing.Bitmap ComposeTrayIconBitmap(bool isWorking, double spinAngleDegrees)
     {
         const int size = 128; // matches the previous GeneratedIconSource.Size default/convention.
         var bitmap = new System.Drawing.Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
@@ -229,10 +264,14 @@ public partial class MainWindow : Window
         graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
         graphics.Clear(System.Drawing.Color.Transparent);
 
-        const float glyphMargin = size * 0.12f;
-        var glyphRect = new System.Drawing.RectangleF(glyphMargin, glyphMargin, size - glyphMargin * 2, size - glyphMargin * 2);
-        graphics.DrawImage(_glyphBitmap, glyphRect);
-
+        // Ring drawn FIRST, *behind* the glyph (2026-10-07) - not just a z-order tweak: once the
+        // glyph's own margin was tightened (below) to make the figure as large as possible, the
+        // ring's existing near-edge positioning started visibly cutting across the figure's own
+        // silhouette (confirmed by rendering - a visible gold/white bar across the lotus seat).
+        // Drawing it behind the glyph instead means any part of the ring that falls under the
+        // figure's opaque pixels is naturally occluded by it, while the part that falls in the
+        // glyph's own (still-transparent) background shows through - reading as a halo glowing
+        // from behind the figure rather than a ring competing with it for the same space.
         if (isWorking)
         {
             const float ringMargin = size * 0.045f;
@@ -253,17 +292,12 @@ public partial class MainWindow : Window
             }
         }
 
-        if (hasUnread)
-        {
-            const float dotSize = size * 0.26f;
-            const float dotInset = size * 0.02f;
-            var dotRect = new System.Drawing.RectangleF(size - dotSize - dotInset, size - dotSize - dotInset, dotSize, dotSize);
-            using var dotOutlinePen = new System.Drawing.Pen(System.Drawing.Color.White, size * 0.02f);
-            // #F44336 matches the per-session unread dot's own Fill in MainWindow.xaml - same red everywhere this app marks "unread".
-            using var dotBrush = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(244, 67, 54));
-            graphics.FillEllipse(dotBrush, dotRect);
-            graphics.DrawEllipse(dotOutlinePen, dotRect);
-        }
+        // 4% margin (down from 12%, 2026-10-07 per user feedback: "make the icon as large as
+        // possible, right now it seems smaller compared to other tray icons") - just enough to
+        // avoid edge-clipping/anti-aliasing artifacts at the very border.
+        const float glyphMargin = size * 0.04f;
+        var glyphRect = new System.Drawing.RectangleF(glyphMargin, glyphMargin, size - glyphMargin * 2, size - glyphMargin * 2);
+        graphics.DrawImage(_glyphBitmap, glyphRect);
 
         return bitmap;
     }
@@ -365,9 +399,6 @@ public partial class MainWindow : Window
     }
 
     private void ShowSessions_Click(object sender, RoutedEventArgs e) => TogglePopup(forceShow: true);
-
-    /// <summary>Clicking a finished-session balloon notification reopens the popup — the same as clicking the tray icon itself.</summary>
-    private void TrayIcon_TrayBalloonTipClicked(object sender, RoutedEventArgs e) => TogglePopup(forceShow: true);
 
     private void Window_Deactivated(object? sender, EventArgs e)
     {

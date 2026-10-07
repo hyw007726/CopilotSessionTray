@@ -191,21 +191,8 @@ public sealed partial class TrayViewModel : ObservableObject
     [ObservableProperty]
     private Visibility _emptyStateVisibility = Visibility.Visible;
 
-    public int UnreadCount => Sessions.Count(s => s.IsUnread);
-
-    /// <summary>Whether at least one session is actively working, independent of unread status.</summary>
+    /// <summary>Whether at least one session is actively working.</summary>
     public bool IsAnyWorking => Sessions.Any(s => s.Status == SessionStatus.Working);
-
-    /// <summary>
-    /// Whether at least one session is unread (fresh, unacknowledged — see
-    /// <see cref="SessionItemViewModel.IsUnread"/>). Drives the tray icon's small red-dot overlay
-    /// (2026-10-06 redesign — see <c>MainWindow.xaml.cs</c>'s <c>ComposeTrayIconBitmap</c>), added
-    /// alongside the pre-existing <see cref="UnreadCount"/> (still used by <see cref="ToolTipText"/>
-    /// and the popup) specifically because the tray icon itself no longer shows a count at all —
-    /// only whether the dot should be visible, so a plain boolean is what that call site actually
-    /// needs.
-    /// </summary>
-    public bool HasUnreadSessions => Sessions.Any(s => s.IsUnread);
 
     /// <summary>
     /// Whether at least one open session is in the <see cref="SessionStatus.WaitingForInput"/>
@@ -230,31 +217,37 @@ public sealed partial class TrayViewModel : ObservableObject
     /// risk documented on that method applies here, however often this property changes.
     /// </summary>
     /// <remarks>
-    /// <see cref="TrayAggregateState.WaitingForInput"/> deliberately maps to the same gray/idle
-    /// watermark as everything else that isn't <c>Working</c>/<c>AttentionNeeded</c> — same
-    /// "stub, not deleted" reasoning as <see cref="TrayAggregateState"/>'s own remarks.
-    /// <see cref="WaitingForInputWatermarkImage"/> itself is kept loaded (not removed) purely so
-    /// re-enabling this later is a one-line change here, not a re-bake of the art.
+    /// <b>Gold when any visible row is idle-like</b> (2026-10-07, user request: "when there's
+    /// open session in golden, can you also make the watermark golden?") — below
+    /// <c>Working</c> in priority (an actively-working session is still more notable than one
+    /// merely sitting idle), but now a distinct tier above plain gray, matching the same gold
+    /// per-row glyph <see cref="SessionItemViewModel.StatusIconSource"/> already shows for exactly
+    /// these rows (<see cref="SessionItemViewModel.IsIdleLike"/> — made public specifically so
+    /// this switch and that row-level one share one definition rather than risking two
+    /// independently-maintained copies of "what counts as idle-like" drifting apart).
+    /// This is *not* a reversal of <see cref="TrayAggregateState.WaitingForInput"/>'s own "stub,
+    /// not deleted" stance below — that one is specifically about *claiming to know* a session is
+    /// "awaiting a reply" (a thing Copilot CLI's data can't actually distinguish from "long done");
+    /// this is just a visual consistency match for rows already shown in gold today, not a new
+    /// claim about freshness/urgency.
     /// </remarks>
     public ImageSource WatermarkImageSource => AggregateState switch
     {
-        TrayAggregateState.AttentionNeeded => UnreadWatermarkImage,
         TrayAggregateState.Working => WorkingWatermarkImage,
-        _ => IdleWatermarkImage,
+        _ => Sessions.Any(s => s.IsIdleLike) ? WaitingForInputWatermarkImage : IdleWatermarkImage,
     };
 
     private static readonly ImageSource WorkingWatermarkImage = LoadWatermarkImage("TrayIcon.Watermark.Working.png");
-    private static readonly ImageSource UnreadWatermarkImage = LoadWatermarkImage("TrayIcon.Watermark.Unread.png");
     private static readonly ImageSource IdleWatermarkImage = LoadWatermarkImage("TrayIcon.Watermark.Idle.png");
 
     /// <summary>
-    /// Not currently selected by <see cref="WatermarkImageSource"/> (the big popup watermark) —
-    /// kept loaded, ready for reuse there once <see cref="TrayAggregateState.WaitingForInput"/>
-    /// has a real implementation (see that property's remarks). It's also reused on two other
-    /// surfaces as the same gold bitmap: <see cref="SessionItemViewModel.StatusIconSource"/> (the
-    /// per-row "Idle" icon), and — loaded independently as a GDI+ <c>System.Drawing.Bitmap</c>,
-    /// not this WPF <see cref="ImageSource"/> — the actual Win32 tray icon's own base glyph in
-    /// <c>MainWindow.xaml.cs</c>.
+    /// The gold watermark variant — selected by <see cref="WatermarkImageSource"/> whenever any
+    /// visible row is idle-like (2026-10-07 — see that property's own remarks for why this is a
+    /// visual-consistency match, not a reversal of <see cref="TrayAggregateState.WaitingForInput"/>'s
+    /// own "stub, not deleted" stance). Also reused on two other surfaces as the same gold bitmap:
+    /// <see cref="SessionItemViewModel.StatusIconSource"/> (the per-row "Idle" icon), and — loaded
+    /// independently as a GDI+ <c>System.Drawing.Bitmap</c>, not this WPF <see cref="ImageSource"/>
+    /// — the actual Win32 tray icon's own base glyph in <c>MainWindow.xaml.cs</c>.
     /// </summary>
     private static readonly ImageSource WaitingForInputWatermarkImage = LoadWatermarkImage("TrayIcon.Watermark.WaitingForInput.png");
 
@@ -298,7 +291,7 @@ public sealed partial class TrayViewModel : ObservableObject
 
             var working = Sessions.Count(s => s.Status == SessionStatus.Working);
             return $"Copilot Session Tray ({dataLabel}){Environment.NewLine}" +
-                   $"{Sessions.Count} session(s) · {working} working · {UnreadCount} need attention";
+                   $"{Sessions.Count} session(s) · {working} working";
         }
     }
 
@@ -320,43 +313,6 @@ public sealed partial class TrayViewModel : ObservableObject
     }
 
     partial void OnRunAtStartupEnabledChanged(bool value) => StartupRegistration.SetEnabled(value);
-
-    [RelayCommand]
-    private async Task MarkAllRead()
-    {
-        foreach (var session in Sessions)
-        {
-            session.IsUnread = false;
-        }
-
-        RecomputeAggregateState();
-
-        if (IsShowingLiveData)
-        {
-            foreach (var session in Sessions)
-            {
-                await PersistReadMarkerAsync(session.Id, isDismissed: false);
-            }
-        }
-    }
-
-    /// <summary>Marks a single session as read, persisting via <see cref="IAppStateStore"/> for real (non-demo) sessions.</summary>
-    [RelayCommand]
-    private async Task MarkSessionRead(SessionItemViewModel? session)
-    {
-        if (session is null)
-        {
-            return;
-        }
-
-        session.IsUnread = false;
-        RecomputeAggregateState();
-
-        if (IsShowingLiveData)
-        {
-            await PersistReadMarkerAsync(session.Id, isDismissed: false);
-        }
-    }
 
     /// <summary>
     /// Removes a session from this app's visible list only — never touches the underlying
@@ -762,7 +718,6 @@ public sealed partial class TrayViewModel : ObservableObject
             status,
             detail,
             now - entry.RefreshedAtUtc,
-            isUnread: false,
             workingDirectory: summary?.Cwd,
             realSummary: realSummary);
     }
@@ -787,7 +742,7 @@ public sealed partial class TrayViewModel : ObservableObject
         var realSummary = await GetResumeSummaryAsync(summary.Id, summary.Summary);
         return new SessionItemViewModel(
             summary.Id, displayName, SessionStatus.Closed, detail, now - summary.UpdatedAtUtc,
-            isUnread: false, workingDirectory: summary.Cwd, realSummary: realSummary);
+            workingDirectory: summary.Cwd, realSummary: realSummary);
     }
 
     /// <summary>
@@ -978,38 +933,38 @@ public sealed partial class TrayViewModel : ObservableObject
             case 0: // Mixed — a "typical" moment.
                 Sessions.Add(new SessionItemViewModel(
                     "demo-1", "acme/widget-api", SessionStatus.Working,
-                    "Investigating flaky retry logic in the checkout test suite…", TimeSpan.FromMinutes(3), isUnread: false));
+                    "Investigating flaky retry logic in the checkout test suite…", TimeSpan.FromMinutes(3)));
                 Sessions.Add(new SessionItemViewModel(
                     "demo-2", "sample-org/inventory-service", SessionStatus.Finished,
-                    "Added missing test fixture reference.", TimeSpan.FromMinutes(21), isUnread: true));
+                    "Added missing test fixture reference.", TimeSpan.FromMinutes(21)));
                 Sessions.Add(new SessionItemViewModel(
                     "demo-3", "CopilotSessionTray", SessionStatus.WaitingForInput,
-                    "Reviewed IMPLEMENTATION_PLAN.md Phase 0.5 contracts.", TimeSpan.FromHours(1), isUnread: false,
+                    "Reviewed IMPLEMENTATION_PLAN.md Phase 0.5 contracts.", TimeSpan.FromHours(1),
                     workingDirectory: @"C:\Git\CopilotSessionTray"));
                 break;
 
             case 1: // Idle (WaitingForInput status — not confidently colorized, see IconBrush's remarks).
                 Sessions.Add(new SessionItemViewModel(
                     "demo-4", "acme/billing-service", SessionStatus.WaitingForInput,
-                    "Deployed the hotfix; smoke tests passed.", TimeSpan.FromMinutes(9), isUnread: false));
+                    "Deployed the hotfix; smoke tests passed.", TimeSpan.FromMinutes(9)));
                 break;
 
-            case 2: // Needs attention — multiple unread.
+            case 2: // Multiple finished sessions — exercises several idle-like (gold) rows at once.
                 Sessions.Add(new SessionItemViewModel(
                     "demo-5", "sample-org/reporting-tool", SessionStatus.Finished,
-                    "Build succeeded, 0 errors.", TimeSpan.FromMinutes(4), isUnread: true));
+                    "Build succeeded, 0 errors.", TimeSpan.FromMinutes(4)));
                 Sessions.Add(new SessionItemViewModel(
                     "demo-6", "octocat/hello-world", SessionStatus.Finished,
-                    "Applied requested review changes.", TimeSpan.FromMinutes(46), isUnread: true));
+                    "Applied requested review changes.", TimeSpan.FromMinutes(46)));
                 break;
 
             case 3: // Empty.
                 break;
 
-            case 4: // Actively working, nothing unread yet — exercises the tray icon's "working" dot.
+            case 4: // Actively working — exercises the tray icon's "working" ring.
                 Sessions.Add(new SessionItemViewModel(
                     "demo-7", "sample-org/notification-service", SessionStatus.Working,
-                    "Refactoring retry policy configuration…", TimeSpan.FromSeconds(45), isUnread: false));
+                    "Refactoring retry policy configuration…", TimeSpan.FromSeconds(45)));
                 break;
         }
 
@@ -1168,7 +1123,6 @@ public sealed partial class TrayViewModel : ObservableObject
                 }
 
                 existing.Status = SessionStatus.Finished;
-                existing.IsUnread = true;
                 return true;
 
             case SessionChangeKind.Closed:
@@ -1192,25 +1146,20 @@ public sealed partial class TrayViewModel : ObservableObject
         EmptyStateVisibility = Sessions.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
         // Priority order (highest wins) — see TrayAggregateState's own doc comment.
-        // AttentionNeeded (unread — an *observed* transition, genuinely fresh news) outranks
-        // Working, reversed from the original design where Working always won.
         // TrayAggregateState.WaitingForInput is deliberately never assigned here (2026-10-05,
         // see TrayAggregateState's remarks) — kept as a stub enum value for a future real
         // implementation, not computed today, so sessions in that per-session status simply fall
         // through to Idle.
         AggregateState = Sessions.Count == 0
             ? TrayAggregateState.NoSessions
-            : Sessions.Any(s => s.IsUnread)
-                ? TrayAggregateState.AttentionNeeded
-                : IsAnyWorking
-                    ? TrayAggregateState.Working
-                    : TrayAggregateState.Idle;
+            : IsAnyWorking
+                ? TrayAggregateState.Working
+                : TrayAggregateState.Idle;
 
-        // WatermarkImageSource/ToolTipText depend on UnreadCount/IsAnyWorking/HasUnreadSessions/
-        // IsAnyWaitingForInput (and Sessions.Count) directly, not just on AggregateState, so
-        // they're notified explicitly here rather than relying on AggregateState's
-        // [NotifyPropertyChangedFor] — which wouldn't fire if the enum value happens to stay the
-        // same while those still changed.
+        // WatermarkImageSource/ToolTipText depend on IsAnyWorking/IsAnyWaitingForInput (and
+        // Sessions.Count) directly, not just on AggregateState, so they're notified explicitly
+        // here rather than relying on AggregateState's [NotifyPropertyChangedFor] — which
+        // wouldn't fire if the enum value happens to stay the same while those still changed.
         //
         // Raised AFTER AggregateState is assigned above — not before (2026-10-05 fix, see
         // IMPLEMENTATION_PLAN.md): these used to be raised first, which meant any subscriber that
@@ -1220,9 +1169,7 @@ public sealed partial class TrayViewModel : ObservableObject
         // reproduction (not just reasoning): 7 of 8 rapid demo-cycle notifications showed a stale
         // AggregateState at the moment of this very notification before this reorder; 0 of 8
         // after it.
-        OnPropertyChanged(nameof(UnreadCount));
         OnPropertyChanged(nameof(IsAnyWorking));
-        OnPropertyChanged(nameof(HasUnreadSessions));
         OnPropertyChanged(nameof(IsAnyWaitingForInput));
         OnPropertyChanged(nameof(WatermarkImageSource));
         OnPropertyChanged(nameof(ToolTipText));

@@ -5,14 +5,13 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Popup watermark artwork (2026-10-02/05, see IMPLEMENTATION_PLAN.md §9.5/§9.6) — 4
-         color-matched variants of the bodhisattva glyph (green/orange/gold/gray, tracking the
+    <!-- Popup watermark artwork (2026-10-02/05, see IMPLEMENTATION_PLAN.md §9.5/§9.6) — 3
+         color-matched variants of the bodhisattva glyph (green/gold/gray, tracking the
          live tray icon's own state color), used only as a plain WPF Image.Source in
          MainWindow.xaml's popup — never as a tray-icon BackgroundSource; see
          TrayViewModel.IconBrush's doc comment for why. tray-icon-source.svg (the original art)
          is intentionally NOT included here: it's provenance only, never loaded at runtime. -->
     <Resource Include="Assets\TrayIcon.Watermark.Working.png" />
-    <Resource Include="Assets\TrayIcon.Watermark.Unread.png" />
     <Resource Include="Assets\TrayIcon.Watermark.WaitingForInput.png" />
     <Resource Include="Assets\TrayIcon.Watermark.Idle.png" />
   </ItemGroup>
