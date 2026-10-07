@@ -23,7 +23,7 @@
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <!-- DI composition root (App.xaml.cs) — added 2026-09-29 per IMPLEMENTATION_PLAN.md §9.1: real
          constructor injection for TrayViewModel/MainWindow instead of field-initializer `new()`. -->
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.12" />
   </ItemGroup>
 
   <PropertyGroup>
