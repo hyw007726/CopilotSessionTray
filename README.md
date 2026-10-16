@@ -9,6 +9,54 @@ research findings, architecture, and phased plan. See
 [`ROADMAP.md`](./ROADMAP.md) for future ideas (desktop pet mode, a macOS
 port) that aren't scheduled yet.
 
+## What it looks like
+
+<p align="center">
+  <img src="docs/images/overview.png" width="900" alt="A desktop with two pinned session stickers on the left, the session popup in the middle and two finished-session balloons on the right">
+</p>
+
+These are the real windows, rendered with made-up sample sessions on a plain
+backdrop, so nothing here comes from anyone's actual work.
+
+**The session popup.** Left-click the tray icon to see your open Copilot CLI
+sessions and the most recently closed ones, each with its state, its folder and
+how long it has been in that state, and buttons to pin it as a desktop sticker,
+resume it in a new terminal, read its summary or remove it from the list. The
+slider at the bottom sets how see-through the stickers are. "🗒 Summary" shows
+what a session is about (its latest checkpoint, or a recap of its first request
+and latest reply) without opening the terminal it runs in.
+
+<table>
+  <tr>
+    <td valign="top"><img src="docs/images/popup.png" width="340" alt="The session popup listing three sessions, each with Pin or Unpin, Resume, Summary and Remove buttons"></td>
+    <td valign="top"><img src="docs/images/summary.png" width="480" alt="The Summary panel showing a session's overview and next steps"></td>
+  </tr>
+</table>
+
+**Stickers and balloons.** A pinned session becomes a note on the desktop,
+green while the session works and light yellow otherwise. Drag it to move it,
+drag an edge to resize it (the text scales with it), click ✕ to hide it until
+the session's next state change, or double-click it to resume the session with
+its history. When a session finishes, a colorful balloon floats up from just
+above the taskbar with what the turn reported; click it to pop it.
+
+<table>
+  <tr>
+    <td valign="top"><img src="docs/images/stickers.png" width="300" alt="Three session stickers: one green while its session works and two light yellow, one of them resized with larger text"></td>
+    <td valign="top"><img src="docs/images/balloons.png" width="560" alt="Three colorful notification balloons, each titled with a session name and showing what its turn reported"></td>
+  </tr>
+</table>
+
+**The tray icon.** The gold glyph stays plain while nothing is working and
+glows from its folded palms while a session is. Right-click it for the menu.
+
+<table>
+  <tr>
+    <td valign="top"><img src="docs/images/tray.png" width="520" alt="The tray icon when idle, and as its glow breathes while a session is working"></td>
+    <td valign="top"><img src="docs/images/menu.png" width="295" alt="The tray icon's right-click menu"></td>
+  </tr>
+</table>
+
 ## Status
 
 **Phases 1-4 complete.** A real Windows tray icon shows up (via
@@ -73,7 +121,7 @@ implementations of all 9 contracts behind `Services/` — reading the real
 checking real process liveness, launching real terminal sessions
 (resume/start-from-summary/start-new-task/headless, each in its own
 distinctly-colored terminal pane), and persisting this app's own
-dismissal markers, preferences, and display-name overrides under
+dismissal markers, preferences, display-name overrides, and sticker pins under
 `%LOCALAPPDATA%\CopilotSessionTray\`. The app starts directly on the
 **live** view (your real currently-open + 10 most-recent closed sessions);
 "Cycle demo data" still walks 5 fixed fake scenarios on demand. A
@@ -107,8 +155,9 @@ corrupted non-ASCII text in launch scripts, the resume-seed composition, frozen
 elapsed labels and a startup duplicate-row race, then the choices that review
 left open: session titles taken from your own `/rename` and the checkpoints,
 richer resume seeds, balloons that say what the turn did, and a resumed-from
-note on the rows, and finally a Summary panel that shows a session's summary
-the way you'd read it instead of the text sent to Copilot.
+note on the rows, and a Summary panel that shows a session's summary
+the way you'd read it instead of the text sent to Copilot, and finally
+desktop stickers for pinned sessions (§9.8).
 
 ## Project layout
 
@@ -124,8 +173,9 @@ src/
                                        checkpoints, the database), the reader-facing summary view and the
                                        small markdown reader behind it, the SessionDetectionEngine
                                        poll/diff "brain" (incl. what each turn reported and how long it
-                                       took), events.jsonl tailing
-  CopilotSessionTray.Core.Tests/      xUnit tests (316), fixture-based — every service takes an optional
+                                       took), events.jsonl tailing, and the rules behind the desktop
+                                       stickers (their state, layout and gist)
+  CopilotSessionTray.Core.Tests/      xUnit tests (405), fixture-based — every service takes an optional
                                        path override so tests never touch the real .copilot folder (the
                                        launch-script tests also run the generated script through cmd.exe)
   CopilotSessionTray.App/             WPF tray shell, DI composition root in App.xaml.cs
@@ -135,7 +185,10 @@ src/
     MainWindow.xaml                   Hosts the TaskbarIcon + doubles as the click-to-show session popup
     BalloonWindow.xaml                One notification balloon: a transparent, non-activating window drawn as a glossy party balloon
     SessionSummaryWindow.xaml         The "🗒 Summary" panel: a session's summary as formatted, selectable text (SummaryDocumentBuilder.cs)
+    Stickers/                         StickerWindow (a borderless, always-on-top desktop sticker that never takes focus) + StickerManager (one per pinned session)
     TrayIconRenderer.cs               Draws the tray icon: exact-size, emboldened gold glyph + a radial glow from the palms
+docs/
+  images/                             The screenshots in this README, rendered from made-up sample sessions
 ```
 
 ## Try it
@@ -194,6 +247,21 @@ id, sits behind "Text sent to Copilot when starting a new session from this
 summary", with a Copy button. The summary is re-read each time the panel opens
 and before "Resume with summary", so a checkpoint written while the app was
 running shows up without a restart.
+Pin a session with its "📌 Pin" button and a sticker for it appears on the
+desktop, from the top-left corner down the left edge (wrapping into further
+columns). A sticker shows the session's name, the gist — what the session is
+working on, or what its last turn reported — and a line such as
+"Working · 12m · opened 1h 5m ago" (its state, how long it has been in it, and
+how long ago the session was opened); it is green while the session works and
+light yellow otherwise. Stickers stay on top of other windows and never take
+keyboard focus. Drag one to move it; drag its right edge, bottom edge or corner
+to resize it, and its text grows or shrinks with it (never below 85% of the
+default size); each remembers its place and size. The ✕ hides a sticker until
+that session's next state change, and a double-click resumes the session with
+its history in a new terminal after a Yes/No confirmation. The slider at the
+bottom of the popup sets the transparency of all stickers, "Show stickers" in
+the tray menu hides or shows them all, and "📌 Unpin" removes one. Pins, places
+and the slider survive restarts (see IMPLEMENTATION_PLAN.md §9.8).
 Each terminal this app opens (resume/start new task) gets its own
 distinct background color so concurrent panes are easy to tell apart.
 Quit is the only way to fully
