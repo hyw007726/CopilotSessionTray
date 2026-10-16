@@ -52,6 +52,49 @@ public sealed class SessionWorkspaceReaderTests : IDisposable
         Assert.Null(info.Name);
     }
 
+    [Fact]
+    public void Parse_ReadsTheFolderAndRepository()
+    {
+        var info = ParseOk("id: abc\ncwd: C:\\Users\\Sample User\\Documents\\my project\nrepository: sample-org/inventory-service\nname: Title\nuser_named: false\n");
+
+        Assert.Equal(@"C:\Users\Sample User\Documents\my project", info.Cwd);
+        Assert.Equal("sample-org/inventory-service", info.Repository);
+        Assert.Equal("Title", info.Name);
+    }
+
+    [Theory]
+    [InlineData("cwd: 'C:\\Work\\sample-repo'")]
+    [InlineData("cwd: \"C:\\\\Work\\\\sample-repo\"")]
+    [InlineData("cwd: C:\\Work\\sample-repo # note to self")]
+    public void Parse_ReadsTheFolderInEveryScalarForm(string line)
+    {
+        var info = ParseOk(line + "\nname: Title\n");
+
+        Assert.Equal(@"C:\Work\sample-repo", info.Cwd);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("cwd:\nrepository:")]
+    [InlineData("cwd: ''\nrepository: ''")]
+    [InlineData("cwd: null\nrepository: ~")]
+    public void Parse_ReportsNoFolderOrRepository_WhenAbsentOrEmpty(string lines)
+    {
+        var info = ParseOk(lines + "\nname: Title\n");
+
+        Assert.Null(info.Cwd);
+        Assert.Null(info.Repository);
+    }
+
+    [Fact]
+    public void Parse_IgnoresNestedFolderAndRepositoryKeys()
+    {
+        var info = ParseOk("owner:\n  cwd: nested\n  repository: nested\ncwd: real\nrepository: real-repo\n");
+
+        Assert.Equal("real", info.Cwd);
+        Assert.Equal("real-repo", info.Repository);
+    }
+
     [Theory]
     [InlineData("name: ''")]
     [InlineData("name: \"\"")]

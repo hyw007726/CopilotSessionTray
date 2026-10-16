@@ -9,7 +9,15 @@ namespace CopilotSessionTray.Core.Services;
 /// <param name="ResumeText">The text that seeds a new session from this one (see <see cref="ResumeSummaryBuilder"/>).</param>
 /// <param name="OriginSessionId">The session this one was seeded from by "Resume with summary", if any.</param>
 /// <param name="View">The same content as <paramref name="ResumeText"/>, laid out for a person to read.</param>
-public sealed record SessionSummaryDetails(string? Title, string ResumeText, string? OriginSessionId, SessionSummaryView View);
+/// <param name="Repository">The repository the session works in: from the history database, else from the session's <c>workspace.yaml</c>.</param>
+/// <param name="Cwd">The folder the session was started from: from the history database, else from the session's <c>workspace.yaml</c>.</param>
+public sealed record SessionSummaryDetails(
+    string? Title,
+    string ResumeText,
+    string? OriginSessionId,
+    SessionSummaryView View,
+    string? Repository = null,
+    string? Cwd = null);
 
 /// <summary>
 /// Single owner of "what is this session called and what is it about": combines the history
@@ -34,14 +42,17 @@ public sealed class SessionSummaryProvider
     {
         var checkpoints = await TryReadAsync(() => _historyStore.GetCheckpointsAsync(sessionId, cancellationToken)).ConfigureAwait(false);
         var turns = await TryReadAsync(() => _historyStore.GetTurnsAsync(sessionId, cancellationToken)).ConfigureAwait(false);
-        var title = ResolveTitle(summary, _workspaceReader.Read(sessionId), checkpoints);
+        var workspace = _workspaceReader.Read(sessionId);
+        var title = ResolveTitle(summary, workspace, checkpoints);
         var content = ResumeSummaryBuilder.Compose(title, checkpoints, turns);
 
         return new SessionSummaryDetails(
             title,
             ResumeSummaryBuilder.RenderSeed(sessionId, title, content),
             ResumeSummaryBuilder.FindOriginSessionId(turns),
-            ResumeSummaryBuilder.ToView(content));
+            ResumeSummaryBuilder.ToView(content),
+            FirstPresent(summary?.Repository, workspace?.Repository),
+            FirstPresent(summary?.Cwd, workspace?.Cwd));
     }
 
     /// <summary>
@@ -90,6 +101,9 @@ public sealed class SessionSummaryProvider
             return default;
         }
     }
+
+    private static string? FirstPresent(string? first, string? second) =>
+        IsPresent(first) ? first : IsPresent(second) ? second : null;
 
     private static bool IsPresent([NotNullWhen(true)] string? text) => !string.IsNullOrWhiteSpace(text);
 }

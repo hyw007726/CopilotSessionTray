@@ -90,6 +90,7 @@ public sealed partial class TrayViewModel : ObservableObject
     private readonly INotificationService _notificationService;
     private readonly DispatcherTimer _monitorTimer;
     private bool _isPolling;
+    private bool _isSummaryDialogOpen;
 
     // Starts at 5 (not the implicit default of 0) so the FIRST real view (triggered by
     // StartMonitoring() below) is the live scenario, not fake demo data — see the class doc
@@ -461,10 +462,19 @@ public sealed partial class TrayViewModel : ObservableObject
 
         await RefreshSummaryAsync(session);
         var originalDisplayName = session.DisplayName;
-        new SessionSummaryWindow(session) { Owner = TryGetOwnerWindow() }.ShowDialog();
+        _isSummaryDialogOpen = true;
+        try
+        {
+            new SessionSummaryWindow(session) { Owner = TryGetOwnerWindow() }.ShowDialog();
+        }
+        finally
+        {
+            _isSummaryDialogOpen = false;
+        }
 
         if (IsShowingLiveData && session.DisplayName != originalDisplayName)
         {
+            session.HasPlaceholderName = false;
             await _appStateStore.SetCustomDisplayNameAsync(session.Id, session.DisplayName);
         }
     }
@@ -770,9 +780,10 @@ public sealed partial class TrayViewModel : ObservableObject
 
         var shortId = entry.SessionId.Length > 8 ? entry.SessionId[..8] : entry.SessionId;
         var details = await _summaryProvider.GetAsync(entry.SessionId, summary);
-        var computedName = ToDisplayText(details.Title) ?? summary?.Repository ?? summary?.Cwd ?? $"Session {shortId}…";
+        var title = ToDisplayText(details.Title);
+        var computedName = title ?? details.Repository ?? details.Cwd ?? $"Session {shortId}…";
         var displayName = await ApplyCustomDisplayNameOverrideAsync(entry.SessionId, computedName);
-        var detail = summary?.Cwd is { Length: > 0 } cwd
+        var detail = details.Cwd is { Length: > 0 } cwd
             ? $"{cwd} · opened {FormatAge(now - entry.OpenedAtUtc)} ago"
             : $"Opened {FormatAge(now - entry.OpenedAtUtc)} ago.";
         detail = await AppendOriginAsync(detail, details.OriginSessionId);
@@ -783,9 +794,12 @@ public sealed partial class TrayViewModel : ObservableObject
             status,
             detail,
             now - entry.RefreshedAtUtc,
-            workingDirectory: summary?.Cwd,
+            workingDirectory: details.Cwd,
             realSummary: details.ResumeText,
-            summaryView: details.View);
+            summaryView: details.View)
+        {
+            HasPlaceholderName = title is null && displayName == computedName,
+        };
     }
 
     /// <summary>
@@ -931,6 +945,11 @@ public sealed partial class TrayViewModel : ObservableObject
                          // tick; the next one tries again from scratch.
             }
 
+            if (IsShowingLiveData)
+            {
+                await RefreshPlaceholderNamesAsync();
+            }
+
             if (changes.Count == 0)
             {
                 return;
@@ -960,6 +979,34 @@ public sealed partial class TrayViewModel : ObservableObject
         finally
         {
             _isPolling = false;
+        }
+    }
+
+    private async Task RefreshPlaceholderNamesAsync()
+    {
+        foreach (var session in Sessions.Where(s => s.HasPlaceholderName).ToList())
+        {
+            string? title;
+            try
+            {
+                title = ToDisplayText(await _summaryProvider.GetTitleAsync(session.Id));
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (_isSummaryDialogOpen || !session.HasPlaceholderName)
+            {
+                continue;
+            }
+
+            if (title is not null)
+            {
+                session.DisplayName = title;
+            }
+
+            session.HasPlaceholderName = title is null && session.Status != SessionStatus.Closed;
         }
     }
 

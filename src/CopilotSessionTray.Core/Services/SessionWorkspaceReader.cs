@@ -6,11 +6,11 @@ using CopilotSessionTray.Core.Models;
 namespace CopilotSessionTray.Core.Services;
 
 /// <summary>
-/// Read-only access to the <c>name</c> and <c>user_named</c> fields of a session's
-/// <c>workspace.yaml</c>. Deliberately a small, defensive reader rather than a YAML library: it
-/// understands the scalar forms Copilot CLI actually writes (plain, single- and double-quoted, and
-/// block scalars) and reports nothing for anything else, so a format change degrades to "no
-/// name" instead of an error.
+/// Read-only access to the <c>name</c>, <c>user_named</c>, <c>cwd</c> and <c>repository</c> fields
+/// of a session's <c>workspace.yaml</c>. Deliberately a small, defensive reader rather than a YAML
+/// library: it understands the scalar forms Copilot CLI actually writes (plain, single- and
+/// double-quoted, and block scalars) and reports nothing for anything else, so a format change
+/// degrades to "no name" instead of an error.
 /// </summary>
 public sealed class SessionWorkspaceReader
 {
@@ -62,6 +62,8 @@ public sealed class SessionWorkspaceReader
     {
         var lines = text.TrimStart('\uFEFF').Split('\n').Select(line => line.TrimEnd('\r')).ToArray();
         string? name = null;
+        string? cwd = null;
+        string? repository = null;
         var userNamed = false;
 
         for (var index = 0; index < lines.Length; index++)
@@ -73,25 +75,34 @@ public sealed class SessionWorkspaceReader
             }
 
             var key = match.Groups[1].Value;
-            if (key is not ("name" or "user_named"))
+            if (key is not ("name" or "user_named" or "cwd" or "repository"))
             {
                 continue;
             }
 
             var (value, lastLine) = ReadScalar(lines, index, match.Groups[2].Value);
             index = lastLine;
-            if (key == "name")
+            switch (key)
             {
-                name = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-            }
-            else
-            {
-                userNamed = string.Equals(value?.Trim(), "true", StringComparison.OrdinalIgnoreCase);
+                case "name":
+                    name = NullIfBlank(value);
+                    break;
+                case "cwd":
+                    cwd = NullIfBlank(value);
+                    break;
+                case "repository":
+                    repository = NullIfBlank(value);
+                    break;
+                default:
+                    userNamed = string.Equals(value?.Trim(), "true", StringComparison.OrdinalIgnoreCase);
+                    break;
             }
         }
 
-        return new SessionWorkspaceInfo(name, userNamed);
+        return new SessionWorkspaceInfo(name, userNamed, cwd, repository);
     }
+
+    private static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static (string? Value, int LastLine) ReadScalar(string[] lines, int index, string rest)
     {

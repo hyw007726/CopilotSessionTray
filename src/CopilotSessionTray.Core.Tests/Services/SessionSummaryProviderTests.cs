@@ -231,6 +231,51 @@ public sealed class SessionSummaryProviderTests : IDisposable
     }
 
     [Fact]
+    public async Task GetAsync_TakesTheFolderAndRepositoryFromTheDatabaseRow_WhenThereIsOne()
+    {
+        WriteWorkspace("cwd: C:\\Other\nrepository: other-org/other\nname: Generated\nuser_named: false\n");
+        var row = new SessionSummary(SessionId, @"C:\Git", "sample-org/inventory-service", null, "title", DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch);
+
+        var details = await CreateProvider().GetAsync(SessionId, row);
+
+        Assert.Equal(@"C:\Git", details.Cwd);
+        Assert.Equal("sample-org/inventory-service", details.Repository);
+    }
+
+    [Fact]
+    public async Task GetAsync_FallsBackToTheWorkspaceFileForTheFolderAndRepository_WhenThereIsNoDatabaseRow()
+    {
+        WriteWorkspace("cwd: C:\\Work\\sample-repo\nrepository: sample-org/inventory-service\nuser_named: false\n");
+
+        var details = await CreateProvider().GetAsync(SessionId, null);
+
+        Assert.Null(details.Title);
+        Assert.Equal(@"C:\Work\sample-repo", details.Cwd);
+        Assert.Equal("sample-org/inventory-service", details.Repository);
+    }
+
+    [Fact]
+    public async Task GetAsync_FallsBackToTheWorkspaceFile_ForBlankDatabaseValues()
+    {
+        WriteWorkspace("cwd: C:\\Work\\sample-repo\nuser_named: false\n");
+        var row = new SessionSummary(SessionId, "", "  ", null, null, DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch);
+
+        var details = await CreateProvider().GetAsync(SessionId, row);
+
+        Assert.Equal(@"C:\Work\sample-repo", details.Cwd);
+        Assert.Null(details.Repository);
+    }
+
+    [Fact]
+    public async Task GetAsync_ReportsNoFolderOrRepository_WhenNothingIsKnown()
+    {
+        var details = await CreateProvider().GetAsync(SessionId, null);
+
+        Assert.Null(details.Cwd);
+        Assert.Null(details.Repository);
+    }
+
+    [Fact]
     public async Task GetTitleAsync_ReadsTheDatabaseRow_WhenNoneIsGiven()
     {
         _store.Session = Db("database title");

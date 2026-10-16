@@ -1588,6 +1588,33 @@ needed to change; this was purely an internal ordering bug in one method.
 
 **Still open**: a bold or code span cut by truncation shows its literal `**` or backtick at the cut (about 10 runs across the 887 real sections); tables are monospace rows rather than a grid; links, images, HTML and `_underscore_` emphasis are shown as typed.
 
+#### Follow-up (2026-10-16): rows no longer keep a session-id name
+
+**Requested by the user**: "can you check why [the tray] sessions listed are mostly named with sessionId" — asked as a question; the cause was found, and the fix built and left uncommitted.
+
+**Cause**, reproduced with a harness that drives the real `TrayViewModel` and `SessionDetectionEngine` over fixture files, and checked against the real `.copilot` data:
+- A row's name was resolved once, when the row was built. The monitor builds the row within one 3-second poll of a session's lock file and registry entry appearing, but Copilot CLI writes the name (`name` in `workspace.yaml`, and the database `summary`) only when the first prompt is processed — 6 seconds after the session started in the measured case, any time later for an interactive one. So every session started while the tray was running got the `Session xxxxxxxx…` stand-in and kept it until the app was restarted; later events only patched the status. A freshly started app looked fine (1 of 13 real rows id-named) and the list degraded over the day, with the newest rows, which are inserted at the top, hit first.
+- A session that never gets a prompt never gets a name: 103 of the 590 real `workspace.yaml` files have none, 102 of them with almost no events. The repository/folder fallbacks came only from the database row, which a new or empty session does not have, although every `workspace.yaml` records `cwd` (590 of 590; `repository` in 89).
+- Same cause, second symptom: a row built before the database row existed had no working directory, so Resume opened the terminal in the home folder instead of the session's own.
+
+**Fix**:
+- `SessionWorkspaceReader` / `SessionWorkspaceInfo` also read `cwd` and `repository`; `SessionSummaryDetails` gains `Repository` and `Cwd` (the history row first, `workspace.yaml` second). An open row's name is now the title, else the repository, else the folder, else `Session <id>…`, and its detail line and working directory use the same folder.
+- `SessionItemViewModel.HasPlaceholderName` marks a row whose name is a stand-in. On every monitor tick `TrayViewModel.RefreshPlaceholderNamesAsync` re-resolves those rows' titles (`GetTitleAsync`, which never reads turns), keeps trying while the session is open, makes one last try after it closes, and stops once a title is found.
+- The user's own name always wins: a local rename clears the flag synchronously, and no row is updated while the Summary dialog is open — it edits `DisplayName` two-way, so a background change there would be mistaken for the user's rename and saved as a local override.
+
+**Decisions made without asking**: the stand-in is the folder (what a database-backed row already falls back to), not a generic "New session"; a nameless open row costs one small file read and two read-only SQLite queries every 3 seconds for as long as it stays open and nameless (measured on the real database: about 0.5 ms per lookup, 0.017% of a core).
+
+**Verified**:
+- Build 0 warnings; 316 tests pass (303 before). The 13 new ones cover the reader (folder and repository in every scalar form, empty values, nested keys) and the provider (history row wins, workspace fallback, blank values, nothing known). Mutation check on a scratch copy: 4 single-point mutations (fallback removed, precedence reversed, blank values counted as present, `cwd` no longer read) — all caught.
+- `SessionWorkspaceReader` against PyYAML over all 590 real `workspace.yaml` files: 0 mismatches for `cwd` and `repository`.
+- The harness (the real `TrayViewModel` and `SessionDetectionEngine` over fixture files, with the real Summary window driven through its visual tree): the old code failed 6 of the 9 checks that apply to it (a new session's row is id-named, has no folder, and stays id-named after the name is written; an empty session is id-named; Resume launches with no folder; a session named and closed within one poll stays id-named); the new code passes all 18. That includes the dialog cases: a name typed while Copilot's name arrives is kept and saved as the local override, and a name arriving while the dialog is merely open is applied after it closes and is not saved as an override. Mutation check on the view model: removing the flag clear on a local rename fails 1 check (the typed name is overwritten), removing the dialog guard fails 5 (the name changes under the open dialog and is saved as an override).
+- Real `.copilot` data, read-only, through the real `TrayViewModel` with a temporary state file: 13 rows before and after, id-named rows 1 → 0 (the open session that never had a prompt now shows its folder, with the right working directory).
+- The tray was restarted on the fixed build through its scheduled task, and its tooltip reads 13 sessions, as the read-only run predicted.
+
+**Not verified**: the row text in the live popup (it is hidden, so only the tray tooltip was read through UI Automation).
+
+**Still open**: the detail line's "opened … ago" is computed once when the row is built, so it never advances, and reads "opened just now ago" for a row built in a session's first minute; the database `summary` can be a raw first prompt (two real fork sessions show one) and outranks a better generated workspace name.
+
 ## 10. Milestones
 
 1. **Phase 0 — Spike**: throwaway console app that polls

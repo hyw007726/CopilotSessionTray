@@ -125,7 +125,7 @@ src/
                                        small markdown reader behind it, the SessionDetectionEngine
                                        poll/diff "brain" (incl. what each turn reported and how long it
                                        took), events.jsonl tailing
-  CopilotSessionTray.Core.Tests/      xUnit tests (303), fixture-based — every service takes an optional
+  CopilotSessionTray.Core.Tests/      xUnit tests (316), fixture-based — every service takes an optional
                                        path override so tests never touch the real .copilot folder (the
                                        launch-script tests also run the generated script through cmd.exe)
   CopilotSessionTray.App/             WPF tray shell, DI composition root in App.xaml.cs

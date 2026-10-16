@@ -48,6 +48,8 @@ public sealed partial class SessionItemViewModel : ObservableObject
     /// </summary>
     public string? WorkingDirectory { get; }
 
+    internal bool HasPlaceholderName { get; set; }
+
     /// <summary>
     /// For real sessions: the text built by <see cref="Core.Services.ResumeSummaryBuilder"/> —
     /// the latest checkpoint (overview and next steps), else a recap of the first request and
