@@ -4,7 +4,7 @@ namespace CopilotSessionTray.Core.Contracts;
 
 /// <summary>
 /// Persists this application's own state — read/unread markers, user
-/// preferences, and local display-name overrides — entirely separate from
+/// preferences, local display-name overrides, and sticker settings and pins — entirely separate from
 /// Copilot CLI's <c>.copilot</c> folder (typically under
 /// <c>%LOCALAPPDATA%\CopilotSessionTray\</c>). Copilot CLI has no native
 /// "unread" concept; this app owns it end to end.
@@ -48,5 +48,14 @@ public interface IAppStateStore
     /// <param name="customDisplayName">The new local display name, or null/empty to clear the override.</param>
     /// <param name="cancellationToken">Token to cancel the operation.</param>
     Task SetCustomDisplayNameAsync(string sessionId, string? customDisplayName, CancellationToken cancellationToken = default);
+
+    /// <summary>Gets the saved sticker settings and pinned stickers (oldest pin first), or defaults if none have been saved yet.</summary>
+    /// <param name="cancellationToken">Token to cancel the operation.</param>
+    Task<StickerSnapshot> GetStickersAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Replaces the saved sticker settings and pinned stickers.</summary>
+    /// <param name="snapshot">The sticker state to persist.</param>
+    /// <param name="cancellationToken">Token to cancel the operation.</param>
+    Task SaveStickersAsync(StickerSnapshot snapshot, CancellationToken cancellationToken = default);
 }
 

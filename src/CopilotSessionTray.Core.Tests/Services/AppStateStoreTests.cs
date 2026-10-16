@@ -167,6 +167,71 @@ public sealed class AppStateStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task GetStickersAsync_ReturnsDefaults_WhenNeverSaved()
+    {
+        var snapshot = await CreateStore().GetStickersAsync();
+
+        Assert.Equal(new StickerSettings(), snapshot.Settings);
+        Assert.Empty(snapshot.Pinned);
+    }
+
+    [Fact]
+    public async Task SaveStickersAsync_RoundTripsSettingsPinsAndPlacements()
+    {
+        var first = new PinnedSticker("session-1", new DateTimeOffset(2026, 1, 2, 3, 4, 5, TimeSpan.Zero), new StickerPlacement(10, 20, 300, 150));
+        var second = new PinnedSticker("session-2", new DateTimeOffset(2026, 1, 3, 3, 4, 5, TimeSpan.Zero), StickerPlacement.None);
+
+        await CreateStore().SaveStickersAsync(new StickerSnapshot(new StickerSettings(false, 0.45), [first, second]));
+        var snapshot = await CreateStore().GetStickersAsync();
+
+        Assert.Equal(new StickerSettings(false, 0.45), snapshot.Settings);
+        Assert.Equal([first, second], snapshot.Pinned);
+    }
+
+    [Fact]
+    public async Task SaveStickersAsync_LeavesTheRestOfTheStateAlone()
+    {
+        IAppStateStore store = CreateStore();
+        await store.SetCustomDisplayNameAsync("session-1", "My name");
+        await store.SaveReadMarkerAsync(new SessionReadMarker("session-1", 7, DateTimeOffset.UtcNow, IsDismissed: true));
+
+        await store.SaveStickersAsync(new StickerSnapshot(new StickerSettings(true, 0.8), []));
+
+        Assert.Equal("My name", await store.GetCustomDisplayNameAsync("session-1"));
+        Assert.True((await store.GetReadMarkerAsync("session-1"))!.IsDismissed);
+    }
+
+    [Fact]
+    public async Task GetStickersAsync_ToleratesAFileWrittenBeforeStickersExisted()
+    {
+        await File.WriteAllTextAsync(_stateFilePath, "{\"readMarkers\":{},\"customDisplayNames\":{\"session-1\":\"My name\"}}");
+
+        var snapshot = await CreateStore().GetStickersAsync();
+
+        Assert.Equal(new StickerSettings(), snapshot.Settings);
+        Assert.Empty(snapshot.Pinned);
+    }
+
+    [Fact]
+    public async Task GetStickersAsync_CleansUpAHandEditedFile()
+    {
+        await File.WriteAllTextAsync(
+            _stateFilePath,
+            "{\"stickers\":{\"visible\":true,\"opacity\":7,\"pinned\":[" +
+            "{\"sessionId\":\"b\",\"pinnedAtUtc\":\"2026-02-01T00:00:00Z\",\"left\":10,\"width\":-5}," +
+            "{\"sessionId\":\"a\",\"pinnedAtUtc\":\"2026-01-01T00:00:00Z\"}," +
+            "{\"sessionId\":\"a\",\"pinnedAtUtc\":\"2026-03-01T00:00:00Z\"}," +
+            "{\"sessionId\":\"  \",\"pinnedAtUtc\":\"2026-01-01T00:00:00Z\"}]}}");
+
+        var snapshot = await CreateStore().GetStickersAsync();
+
+        Assert.Equal(StickerSettings.MaxOpacity, snapshot.Settings.Opacity);
+        Assert.Equal(["a", "b"], snapshot.Pinned.Select(item => item.SessionId).ToArray());
+        Assert.Equal(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero), snapshot.Pinned[0].PinnedAtUtc);
+        Assert.Equal(new StickerPlacement(10, null, null, null), snapshot.Pinned[1].Placement);
+    }
+
+    [Fact]
     public async Task MutateAsync_CreatesParentDirectory_WhenMissing()
     {
         var nestedPath = Path.Combine(Path.GetTempPath(), $"appstate-tests-nested-{Guid.NewGuid():N}", "app-state.json");

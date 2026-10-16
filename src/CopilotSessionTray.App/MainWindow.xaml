@@ -70,6 +70,7 @@
                     <MenuItem Header="Preview notifications" Command="{Binding ShowDemoBalloonsCommand}" />
                     <Separator />
                     <MenuItem Header="Mute notifications" IsCheckable="True" IsChecked="{Binding IsMuted, Mode=TwoWay}" />
+                    <MenuItem Header="Show stickers" IsCheckable="True" IsChecked="{Binding StickersVisible, Mode=TwoWay}" />
                     <MenuItem Header="Run at startup" IsCheckable="True" IsChecked="{Binding RunAtStartupEnabled, Mode=TwoWay}" />
                     <MenuItem Header="Open Copilot logs folder" Command="{Binding OpenLogsFolderCommand}" />
                     <Separator />
@@ -174,6 +175,11 @@
                                         HorizontalAlignment="Right"
                                         Margin="0,4,0,0">
                                 <Button Padding="5,2" Margin="4,0,0,0" FontSize="10"
+                                        Content="{Binding PinButtonText}"
+                                        ToolTip="Pin this session as a sticker on your screen, or unpin it"
+                                        Command="{Binding DataContext.TogglePinCommand, ElementName=RootWindow}"
+                                        CommandParameter="{Binding}" />
+                                <Button Padding="5,2" Margin="4,0,0,0" FontSize="10"
                                         Content="⤴ Resume"
                                         ToolTip="Choose how to resume this session"
                                         Click="ResumeButton_Click" />
@@ -204,11 +210,23 @@
                    Text="{Binding EmptyStateText}"
                    Visibility="{Binding EmptyStateVisibility}" />
 
-        <StackPanel Grid.Row="2"
-                    Orientation="Horizontal"
-                    HorizontalAlignment="Right"
-                    Margin="8">
-            <Button Padding="8,4" Content="Cycle demo data" Command="{Binding CycleDemoScenarioCommand}" />
-        </StackPanel>
+        <Grid Grid.Row="2" Margin="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock VerticalAlignment="Center" FontSize="11" Foreground="Gray" Text="Sticker opacity" />
+                <Slider Width="90" Margin="6,0,0,0" VerticalAlignment="Center"
+                        Minimum="{Binding MinStickerOpacity, Mode=OneTime}"
+                        Maximum="{Binding MaxStickerOpacity, Mode=OneTime}"
+                        SmallChange="0.05" LargeChange="0.1"
+                        Value="{Binding StickerOpacity, Mode=TwoWay}"
+                        ToolTip="How see-through pinned stickers are" />
+                <TextBlock Width="34" Margin="4,0,0,0" VerticalAlignment="Center" FontSize="11" Foreground="Gray"
+                           Text="{Binding StickerOpacity, StringFormat={}{0:P0}}" />
+            </StackPanel>
+            <Button Grid.Column="1" Padding="8,4" Content="Cycle demo data" Command="{Binding CycleDemoScenarioCommand}" />
+        </Grid>
     </Grid>
 </Window>

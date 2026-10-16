@@ -2,6 +2,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CopilotSessionTray.Core.Models;
+using CopilotSessionTray.Core.Services;
 
 namespace CopilotSessionTray.App.ViewModels;
 
@@ -95,13 +96,41 @@ public sealed partial class SessionItemViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(StatusBrush))]
     [NotifyPropertyChangedFor(nameof(StatusDotVisibility))]
     [NotifyPropertyChangedFor(nameof(StatusIconVisibility))]
+    [NotifyPropertyChangedFor(nameof(IsWorking))]
+    [NotifyPropertyChangedFor(nameof(TimeLine))]
     private SessionStatus _status;
+
+    public bool IsWorking => Status == SessionStatus.Working;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(PinButtonText))]
+    private bool _isPinned;
+
+    public string PinButtonText => IsPinned ? "📌 Unpin" : "📌 Pin";
+
+    [ObservableProperty]
+    private string _gist = string.Empty;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(OpenedLabel))]
+    [NotifyPropertyChangedFor(nameof(TimeLine))]
+    private DateTimeOffset? _openedAtUtc;
+
+    public string OpenedLabel => OpenedAtUtc is { } opened ? FormatOpened(DateTimeOffset.UtcNow - opened) : string.Empty;
+
+    public string TimeLine => OpenedAtUtc is null
+        ? $"{StatusLabel} · {ElapsedLabel}"
+        : $"{StatusLabel} · {ElapsedLabel} · {OpenedLabel}";
+
+    private static string FormatOpened(TimeSpan age) =>
+        age < TimeSpan.FromMinutes(1) ? "opened just now" : $"opened {SessionText.FormatDuration(age)} ago";
 
     [ObservableProperty]
     private string _detail;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ElapsedLabel))]
+    [NotifyPropertyChangedFor(nameof(TimeLine))]
     private TimeSpan _elapsed;
 
     private DateTimeOffset _stateSinceUtc;
@@ -110,6 +139,8 @@ public sealed partial class SessionItemViewModel : ObservableObject
     internal void RefreshElapsed(DateTimeOffset now)
     {
         Elapsed = now > _stateSinceUtc ? now - _stateSinceUtc : TimeSpan.Zero;
+        OnPropertyChanged(nameof(OpenedLabel));
+        OnPropertyChanged(nameof(TimeLine));
     }
 
     partial void OnStatusChanged(SessionStatus value)

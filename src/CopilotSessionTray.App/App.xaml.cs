@@ -1,6 +1,7 @@
 ﻿using System.Threading;
 using System.Windows;
 using System.Windows.Threading;
+using CopilotSessionTray.App.Stickers;
 using CopilotSessionTray.App.ViewModels;
 using CopilotSessionTray.Core.Contracts;
 using CopilotSessionTray.Core.Services;
@@ -91,6 +92,7 @@ public partial class App : Application
         // Finished/Closed detection + notifications, running for the app's entire lifetime from
         // here on regardless of what's currently displayed. Started only after the tray icon
         // exists so the first poll's state is reflected by the icon from the start.
+        _serviceProvider.GetRequiredService<StickerManager>().Start();
         _serviceProvider.GetRequiredService<TrayViewModel>().StartMonitoring();
     }
 
@@ -109,6 +111,11 @@ public partial class App : Application
         services.AddSingleton<IAppStateStore, AppStateStore>();
         services.AddSingleton<ISessionEventStreamReader, SessionEventStreamReader>();
         services.AddSingleton<ISessionDetectionEngine, SessionDetectionEngine>();
+        services.AddSingleton<StickerState>();
+        services.AddSingleton(provider => new StickerManager(
+            provider.GetRequiredService<TrayViewModel>(),
+            provider.GetRequiredService<StickerState>(),
+            StickerManager.AskWithMessageBox));
 
         services.AddSingleton<INotificationService, Services.NotificationService>();
 

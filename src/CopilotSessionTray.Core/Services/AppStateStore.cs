@@ -7,7 +7,7 @@ namespace CopilotSessionTray.Core.Services;
 
 /// <summary>
 /// Real implementation of <see cref="IAppStateStore"/> — persists this
-/// app's own state (read markers, preferences, custom display names) as a
+/// app's own state (read markers, preferences, custom display names, sticker pins) as a
 /// single small JSON file under <c>%LOCALAPPDATA%\CopilotSessionTray\</c>,
 /// entirely separate from anything under <c>.copilot</c>. A
 /// <see cref="SemaphoreSlim"/> serializes read-modify-write operations
@@ -87,6 +87,55 @@ public sealed class AppStateStore : IAppStateStore
         }, cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<StickerSnapshot> GetStickersAsync(CancellationToken cancellationToken = default)
+    {
+        var state = await LoadAsync(cancellationToken).ConfigureAwait(false);
+        if (state.Stickers is not { } stored)
+        {
+            return new StickerSnapshot(new StickerSettings(), Array.Empty<PinnedSticker>());
+        }
+
+        var pinned = (stored.Pinned ?? new List<StoredSticker>())
+            .Where(item => !string.IsNullOrWhiteSpace(item.SessionId))
+            .GroupBy(item => item.SessionId)
+            .Select(group => group.First())
+            .OrderBy(item => item.PinnedAtUtc)
+            .Select(item => new PinnedSticker(
+                item.SessionId,
+                item.PinnedAtUtc,
+                new StickerPlacement(Finite(item.Left), Finite(item.Top), PositiveFinite(item.Width), PositiveFinite(item.Height))))
+            .ToList();
+
+        return new StickerSnapshot(new StickerSettings(stored.Visible, StickerSettings.ClampOpacity(stored.Opacity)), pinned);
+    }
+
+    public async Task SaveStickersAsync(StickerSnapshot snapshot, CancellationToken cancellationToken = default)
+    {
+        await MutateAsync(state =>
+        {
+            state.Stickers = new StoredStickers
+            {
+                Visible = snapshot.Settings.Visible,
+                Opacity = snapshot.Settings.Opacity,
+                Pinned = snapshot.Pinned
+                    .Select(item => new StoredSticker
+                    {
+                        SessionId = item.SessionId,
+                        PinnedAtUtc = item.PinnedAtUtc,
+                        Left = item.Placement.Left,
+                        Top = item.Placement.Top,
+                        Width = item.Placement.Width,
+                        Height = item.Placement.Height,
+                    })
+                    .ToList(),
+            };
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static double? Finite(double? value) => value is { } number && double.IsFinite(number) ? number : null;
+
+    private static double? PositiveFinite(double? value) => value is { } number && double.IsFinite(number) && number > 0 ? number : null;
+
     private async Task<StoredState> LoadAsync(CancellationToken cancellationToken)
     {
         await _fileLock.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -147,6 +196,32 @@ public sealed class AppStateStore : IAppStateStore
         public Dictionary<string, StoredReadMarker> ReadMarkers { get; set; } = new();
 
         public Dictionary<string, string> CustomDisplayNames { get; set; } = new();
+
+        public StoredStickers? Stickers { get; set; }
+    }
+
+    private sealed class StoredStickers
+    {
+        public bool Visible { get; set; } = true;
+
+        public double Opacity { get; set; } = StickerSettings.DefaultOpacity;
+
+        public List<StoredSticker>? Pinned { get; set; } = new();
+    }
+
+    private sealed class StoredSticker
+    {
+        public string SessionId { get; set; } = string.Empty;
+
+        public DateTimeOffset PinnedAtUtc { get; set; }
+
+        public double? Left { get; set; }
+
+        public double? Top { get; set; }
+
+        public double? Width { get; set; }
+
+        public double? Height { get; set; }
     }
 
     private sealed record StoredReadMarker(long LastAcknowledgedEventOffset, DateTimeOffset LastAcknowledgedUtc, bool IsDismissed);

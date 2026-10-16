@@ -227,6 +227,9 @@ public sealed class SessionDetectionEngineTests : IDisposable
     private static SessionEventRecord UserMessage(DateTimeOffset at, string? source = null) =>
         Event("user.message", source is null ? "{\"content\":\"do it\"}" : $"{{\"content\":\"continue\",\"source\":\"{source}\"}}", at);
 
+    private static SessionEventRecord UserMessageText(DateTimeOffset at, string content, string? source = null) =>
+        Event("user.message", $"{{\"content\":{JsonSerializer.Serialize(content)}{(source is null ? string.Empty : $",\"source\":\"{source}\"")}}}", at);
+
     private static SessionEventRecord AssistantMessage(DateTimeOffset at, string content, string? parentToolCallId = null) =>
         Event("assistant.message", $"{{\"content\":{JsonSerializer.Serialize(content)}{(parentToolCallId is null ? string.Empty : $",\"parentToolCallId\":\"{parentToolCallId}\"")}}}", at);
 
@@ -478,6 +481,87 @@ public sealed class SessionDetectionEngineTests : IDisposable
 
         Assert.Equal(SessionChangeKind.Closed, closed.Kind);
         Assert.Null(closed.Outcome);
+        Assert.Null(closed.Request);
+    }
+
+    [Fact]
+    public async Task Started_CarriesTheLatestRequestAndOutcome_ReadFromTheSessionsHistory()
+    {
+        AddGenuinelyOpenSession("session-1", pid: 100, working: false);
+        _eventStreamReader.EventsBySession["session-1"] =
+            [UserMessageText(T0, "Fix the flaky retry test"), AssistantMessage(T0.AddSeconds(30), "Fixed it.")];
+
+        var started = Assert.Single(await CreateEngine().PollAsync());
+
+        Assert.Equal(SessionChangeKind.Started, started.Kind);
+        Assert.Equal("Fix the flaky retry test", started.Request);
+        Assert.Equal("Fixed it.", started.Outcome);
+    }
+
+    [Fact]
+    public async Task Started_HasNoRequestOrOutcome_ForASessionWithoutAnyMessages()
+    {
+        AddGenuinelyOpenSession("session-1", pid: 100, working: false);
+
+        var started = Assert.Single(await CreateEngine().PollAsync());
+
+        Assert.Null(started.Request);
+        Assert.Null(started.Outcome);
+    }
+
+    [Fact]
+    public async Task WorkingStateChanged_CarriesTheRequestTheUserJustMade()
+    {
+        AddGenuinelyOpenSession("session-1", pid: 100, working: false);
+        _eventStreamReader.BatchesBySession["session-1"] = new Queue<IReadOnlyList<SessionEventRecord>>(
+            [[], [UserMessageText(T0, "Refactor the retry policy")]]);
+        var engine = CreateEngine();
+        await engine.PollAsync();
+        _registryReader.Entries["session-1"] = _registryReader.Entries["session-1"] with { Working = true };
+
+        var working = Assert.Single(await engine.PollAsync());
+
+        Assert.Equal(SessionChangeKind.WorkingStateChanged, working.Kind);
+        Assert.Equal("Refactor the retry policy", working.Request);
+    }
+
+    [Fact]
+    public async Task Finished_CarriesTheRequestItAnswered_AlongsideTheOutcome()
+    {
+        var finished = await RunUntilFinished(
+            [[UserMessageText(T0, "Add tests for the layout"), TaskComplete(T0.AddSeconds(50), "Added 12 tests.")]],
+            []);
+
+        Assert.Equal("Add tests for the layout", finished.Request);
+        Assert.Equal("Added 12 tests.", finished.Outcome);
+    }
+
+    [Fact]
+    public async Task Request_IsReplacedByEachRealUserMessage_ButNotByMessagesThatDidNotComeFromTheUser()
+    {
+        var finished = await RunUntilFinished(
+            [[UserMessageText(T0, "first request")], [UserMessageText(T0.AddMinutes(1), "second request"), UserMessageText(T0.AddMinutes(2), "automatic nudge", source: "autopilot")]],
+            []);
+
+        Assert.Equal("second request", finished.Request);
+    }
+
+    [Fact]
+    public async Task Request_IsCutToTwoThousandCharacters()
+    {
+        var finished = await RunUntilFinished([[UserMessageText(T0, new string('x', 5000))]], []);
+
+        Assert.Equal(2000, finished.Request!.Length);
+    }
+
+    [Fact]
+    public async Task Request_IsForgotten_WhenALaterRealUserMessageHasNoReadableContent()
+    {
+        var finished = await RunUntilFinished(
+            [[UserMessageText(T0, "first request")], [Event("user.message", "{}", T0.AddMinutes(1))]],
+            []);
+
+        Assert.Null(finished.Request);
     }
 
     private sealed class FakeRegistryReader : IOpenSessionsRegistryReader

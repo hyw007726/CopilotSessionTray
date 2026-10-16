@@ -108,7 +108,8 @@ public sealed partial class TrayViewModel : ObservableObject
         IYoloTaskRunner yoloTaskRunner,
         IAppStateStore appStateStore,
         ISessionDetectionEngine detectionEngine,
-        INotificationService notificationService)
+        INotificationService notificationService,
+        StickerState stickerState)
     {
         _liveSessionsReader = liveSessionsReader;
         _liveProcessChecker = liveProcessChecker;
@@ -120,6 +121,7 @@ public sealed partial class TrayViewModel : ObservableObject
         _appStateStore = appStateStore;
         _detectionEngine = detectionEngine;
         _notificationService = notificationService;
+        _stickerState = stickerState;
 
         _monitorTimer = new DispatcherTimer { Interval = MonitorPollInterval };
         _monitorTimer.Tick += async (_, _) => await OnMonitorTimerTickAsync();
@@ -159,6 +161,7 @@ public sealed partial class TrayViewModel : ObservableObject
 
     private async Task LoadLiveSessionsThenPollAsync()
     {
+        await LoadStickerStateAsync();
         await LoadLiveSessionsScenarioAsync();
         await OnMonitorTimerTickAsync();
     }
@@ -357,6 +360,11 @@ public sealed partial class TrayViewModel : ObservableObject
 
         if (IsShowingLiveData)
         {
+            if (session.IsPinned)
+            {
+                SetPinned(session, false);
+            }
+
             await PersistReadMarkerAsync(session.Id, isDismissed: true);
         }
     }
@@ -752,6 +760,7 @@ public sealed partial class TrayViewModel : ObservableObject
             // than fail the whole scenario over it.
         }
 
+        await AddMissingPinnedSessionsAsync(now);
         RecomputeAggregateState();
     }
 
@@ -799,6 +808,8 @@ public sealed partial class TrayViewModel : ObservableObject
             summaryView: details.View)
         {
             HasPlaceholderName = title is null && displayName == computedName,
+            OpenedAtUtc = entry.OpenedAtUtc,
+            Gist = SessionGist.FromView(details.View) ?? string.Empty,
         };
     }
 
@@ -822,7 +833,11 @@ public sealed partial class TrayViewModel : ObservableObject
         var detail = await AppendOriginAsync(summary.Cwd ?? summary.Repository ?? "(unknown workspace)", details.OriginSessionId);
         return new SessionItemViewModel(
             summary.Id, displayName, SessionStatus.Closed, detail, now - summary.UpdatedAtUtc,
-            workingDirectory: summary.Cwd, realSummary: details.ResumeText, summaryView: details.View);
+            workingDirectory: summary.Cwd, realSummary: details.ResumeText, summaryView: details.View)
+        {
+            OpenedAtUtc = summary.CreatedAtUtc,
+            Gist = SessionGist.FromView(details.View) ?? string.Empty,
+        };
     }
 
     private async Task<string> AppendOriginAsync(string detail, string? originSessionId)
@@ -1073,7 +1088,20 @@ public sealed partial class TrayViewModel : ObservableObject
             case SessionChangeKind.Started:
                 if (existing is not null)
                 {
-                    return false; // already visible (e.g. as a "closed" history row) — leave it.
+                    ApplyGist(existing, change);
+                    if (existing.Status != SessionStatus.Closed)
+                    {
+                        return false;
+                    }
+
+                    existing.Status = change.Status;
+                    var reopened = await _liveSessionsReader.ReadAsync();
+                    if (reopened.TryGetValue(change.SessionId, out var reopenedEntry))
+                    {
+                        existing.OpenedAtUtc = reopenedEntry.OpenedAtUtc;
+                    }
+
+                    return true;
                 }
 
                 var marker = await _appStateStore.GetReadMarkerAsync(change.SessionId);
@@ -1089,7 +1117,9 @@ public sealed partial class TrayViewModel : ObservableObject
                                     // the same source moments ago) — skip defensively rather than guess.
                 }
 
-                return AddSessionIfNew(await BuildOpenSessionItemAsync(entry, now), atTop: true);
+                var started = await BuildOpenSessionItemAsync(entry, now);
+                ApplyGist(started, change);
+                return AddSessionIfNew(started, atTop: true);
 
             case SessionChangeKind.WorkingStateChanged:
                 if (existing is null)
@@ -1098,6 +1128,7 @@ public sealed partial class TrayViewModel : ObservableObject
                 }
 
                 existing.Status = SessionStatus.Working;
+                ApplyGist(existing, change);
                 return true;
 
             case SessionChangeKind.Finished:
@@ -1107,6 +1138,7 @@ public sealed partial class TrayViewModel : ObservableObject
                 }
 
                 existing.Status = SessionStatus.Finished;
+                ApplyGist(existing, change);
                 return true;
 
             case SessionChangeKind.Closed:
@@ -1131,6 +1163,8 @@ public sealed partial class TrayViewModel : ObservableObject
         {
             return false;
         }
+
+        item.IsPinned = _stickerState.IsPinned(item.Id);
 
         if (atTop)
         {

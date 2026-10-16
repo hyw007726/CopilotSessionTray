@@ -108,7 +108,8 @@ public sealed class SessionDetectionEngine : ISessionDetectionEngine
             {
                 _tracked[sessionId] = new TrackedSession(entry.Working);
                 var startedStatus = entry.Working ? SessionStatus.Working : SessionStatus.WaitingForInput;
-                changes.Add(new SessionChangeEvent(sessionId, SessionChangeKind.Started, startedStatus, now, latestEvent));
+                changes.Add(new SessionChangeEvent(
+                    sessionId, SessionChangeKind.Started, startedStatus, now, latestEvent, tracker.Outcome, Request: tracker.Request));
                 continue;
             }
 
@@ -116,12 +117,13 @@ public sealed class SessionDetectionEngine : ISessionDetectionEngine
             {
                 _tracked[sessionId] = previous with { WasWorking = false };
                 changes.Add(new SessionChangeEvent(
-                    sessionId, SessionChangeKind.Finished, SessionStatus.Finished, now, latestEvent, tracker.Outcome, tracker.WorkedFor));
+                    sessionId, SessionChangeKind.Finished, SessionStatus.Finished, now, latestEvent, tracker.Outcome, tracker.WorkedFor, tracker.Request));
             }
             else if (!previous.WasWorking && entry.Working)
             {
                 _tracked[sessionId] = previous with { WasWorking = true };
-                changes.Add(new SessionChangeEvent(sessionId, SessionChangeKind.WorkingStateChanged, SessionStatus.Working, now, latestEvent));
+                changes.Add(new SessionChangeEvent(
+                    sessionId, SessionChangeKind.WorkingStateChanged, SessionStatus.Working, now, latestEvent, Request: tracker.Request));
             }
 
             // No flag change: nothing to report for this session this poll, per this interface's

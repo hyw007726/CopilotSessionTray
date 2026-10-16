@@ -9,12 +9,17 @@ namespace CopilotSessionTray.Core.Services;
 /// </summary>
 internal sealed class SessionTurnTracker
 {
+    private const int MaxRequestLength = 2000;
+
     private string? _taskSummary;
     private string? _lastMessage;
+    private string? _request;
     private DateTimeOffset? _workStartedUtc;
     private DateTimeOffset? _lastEventUtc;
 
     public string? Outcome => _taskSummary ?? _lastMessage;
+
+    public string? Request => _request;
 
     public TimeSpan? WorkedFor =>
         _workStartedUtc is { } start && _lastEventUtc is { } end && end >= start ? end - start : null;
@@ -57,6 +62,7 @@ internal sealed class SessionTurnTracker
 
         _taskSummary = null;
         _lastMessage = null;
+        _request = GetString(data, "content") is { } content ? SessionText.TakePrefix(content, MaxRequestLength) : null;
         _workStartedUtc = record.TimestampUtc ?? _workStartedUtc;
     }
 
