@@ -87,20 +87,18 @@ internal static class CopilotTerminalLauncher
         // inspects the whole output byte stream regardless of which program (cmd.exe's own echo,
         // in this case) produced it.
         var backgroundColorLine = $"echo {BuildBackgroundColorEscapeSequence(backgroundColorHex)}{Environment.NewLine}";
-        return $"@echo off{Environment.NewLine}{backgroundColorLine}{envSetupLine}copilot {copilotArguments}{Environment.NewLine}";
+        return $"@echo off{Environment.NewLine}chcp 65001 >nul{Environment.NewLine}{backgroundColorLine}{envSetupLine}copilot {copilotArguments}{Environment.NewLine}";
     }
 
     /// <summary>
     /// Makes arbitrary text safe to embed inside a single quoted argument on a generated
-    /// batch-file command line. cmd.exe has no fully reliable, universal escape for embedded
-    /// double-quotes or <c>%</c> (variable expansion) in that position, so rather than fight its
-    /// notoriously inconsistent quoting, this replaces the characters that would otherwise break
-    /// or alter the command with safe look-alikes. Adequate for a demo/summary string; feeding
-    /// arbitrary untrusted text should instead use something injection-proof like PowerShell's
-    /// base64 <c>-EncodedCommand</c>.
+    /// batch-file command line: double quotes become single quotes, <c>%</c> is doubled (the
+    /// batch-file escape, so it reaches <c>copilot</c> as a literal <c>%</c>), and line breaks
+    /// become spaces. Adequate for a demo/summary string; feeding arbitrary untrusted text should
+    /// instead use something injection-proof like PowerShell's base64 <c>-EncodedCommand</c>.
     /// </summary>
     internal static string SanitizeForCmdExe(string text) =>
-        text.Replace('"', '\'').Replace('%', '_').Replace('\r', ' ').Replace('\n', ' ');
+        text.Replace('"', '\'').Replace("%", "%%").Replace('\r', ' ').Replace('\n', ' ');
 
     /// <summary>
     /// Opens a new Windows Terminal window/pane running <c>copilot &lt;copilotArguments&gt;</c> in

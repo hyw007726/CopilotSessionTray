@@ -29,7 +29,7 @@ public sealed class SessionHistoryStoreTests : IDisposable
                 user_message TEXT, assistant_response TEXT, timestamp TEXT NOT NULL);
             CREATE TABLE checkpoints (
                 id INTEGER PRIMARY KEY, session_id TEXT NOT NULL, checkpoint_number INTEGER NOT NULL,
-                title TEXT, overview TEXT, created_at TEXT NOT NULL);
+                title TEXT, overview TEXT, next_steps TEXT, created_at TEXT NOT NULL);
             """;
         command.ExecuteNonQuery();
     }
@@ -178,5 +178,47 @@ public sealed class SessionHistoryStoreTests : IDisposable
         Assert.Equal(1, checkpoints[0].CheckpointNumber);
         Assert.Equal("First", checkpoints[0].Title);
         Assert.Equal(2, checkpoints[1].CheckpointNumber);
+    }
+
+    [Fact]
+    public async Task GetCheckpointsAsync_ReturnsTheNextStepsSection()
+    {
+        InsertSession("session-1", null, null, null, "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z");
+        ExecuteNonQuery(
+            "INSERT INTO checkpoints (session_id, checkpoint_number, title, overview, next_steps, created_at) VALUES " +
+            "('session-1', 1, 'Title', 'overview', 'run the tests', '2026-01-01T00:01:00Z')," +
+            "('session-1', 2, 'Title 2', 'overview 2', NULL, '2026-01-01T00:02:00Z')");
+        ISessionHistoryStore store = CreateStore();
+
+        var checkpoints = await store.GetCheckpointsAsync("session-1");
+
+        Assert.Equal("run the tests", checkpoints[0].NextSteps);
+        Assert.Null(checkpoints[1].NextSteps);
+    }
+
+    [Fact]
+    public async Task GetCheckpointsAsync_StillWorks_OnAnOlderSchemaWithoutNextSteps()
+    {
+        InsertSession("session-1", null, null, null, "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z");
+        ExecuteNonQuery(
+            "DROP TABLE checkpoints;" +
+            "CREATE TABLE checkpoints (id INTEGER PRIMARY KEY, session_id TEXT NOT NULL, checkpoint_number INTEGER NOT NULL, title TEXT, overview TEXT, created_at TEXT NOT NULL);" +
+            "INSERT INTO checkpoints (session_id, checkpoint_number, title, overview, created_at) VALUES ('session-1', 1, 'Title', 'overview', '2026-01-01T00:01:00Z')");
+        ISessionHistoryStore store = CreateStore();
+
+        var checkpoints = await store.GetCheckpointsAsync("session-1");
+
+        var checkpoint = Assert.Single(checkpoints);
+        Assert.Equal("overview", checkpoint.Overview);
+        Assert.Null(checkpoint.NextSteps);
+    }
+
+    private void ExecuteNonQuery(string sql)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = _databasePath }.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
     }
 }

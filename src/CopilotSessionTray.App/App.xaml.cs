@@ -90,8 +90,7 @@ public partial class App : Application
         // Starts the continuous background monitor (§10 Phase 3) — real Started/WorkingStateChanged/
         // Finished/Closed detection + notifications, running for the app's entire lifetime from
         // here on regardless of what's currently displayed. Started only after the tray icon
-        // exists so NotificationService.AttachTrayIcon (called by InitializeTrayIcon above) has
-        // already run by the time the first poll could possibly emit a notification.
+        // exists so the first poll's state is reflected by the icon from the start.
         _serviceProvider.GetRequiredService<TrayViewModel>().StartMonitoring();
     }
 
@@ -103,19 +102,15 @@ public partial class App : Application
         // Deliberately concrete, not behind an interface — see SessionLockFileInspector's own doc
         // comment for why it isn't one of the reviewed Core contracts.
         services.AddSingleton<SessionLockFileInspector>();
+        services.AddSingleton<SessionWorkspaceReader>();
+        services.AddSingleton<SessionSummaryProvider>();
         services.AddSingleton<ISessionLauncher, SessionLauncher>();
         services.AddSingleton<IYoloTaskRunner, YoloTaskRunner>();
         services.AddSingleton<IAppStateStore, AppStateStore>();
         services.AddSingleton<ISessionEventStreamReader, SessionEventStreamReader>();
         services.AddSingleton<ISessionDetectionEngine, SessionDetectionEngine>();
 
-        // Registered as its own concrete singleton (not just behind INotificationService) so
-        // MainWindow can also depend on it directly to call AttachTrayIcon — a method deliberately
-        // kept off INotificationService itself since it's WPF/H.NotifyIcon-specific plumbing, not
-        // part of the reviewed Core-facing contract. TrayViewModel still only ever sees it as
-        // INotificationService, resolving to this exact same instance.
-        services.AddSingleton<Services.NotificationService>();
-        services.AddSingleton<INotificationService>(sp => sp.GetRequiredService<Services.NotificationService>());
+        services.AddSingleton<INotificationService, Services.NotificationService>();
 
         services.AddSingleton<TrayViewModel>();
         services.AddSingleton<MainWindow>();

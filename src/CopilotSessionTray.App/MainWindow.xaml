@@ -55,9 +55,8 @@
                 (IMPLEMENTATION_PLAN.md §9.5/§9.6). TrayIcon.Icon is instead set directly, once per
                 real change, synchronously on the UI thread, from MainWindow.xaml.cs's
                 UpdateTrayIcon() — see its own doc comment for why that's actually race-free (this
-                reasoning still holds after the 2026-10-06 glyph+ring+dot redesign — see
-                ComposeTrayIconBitmap's own doc comment — which replaced GeneratedIconSource
-                entirely with hand-composited System.Drawing drawing, but kept this exact same
+                reasoning still holds with TrayIconRenderer, which replaced GeneratedIconSource
+                entirely with hand-drawn System.Drawing output, but kept this exact same
                 "synchronous, UI-thread-only, one call at a time" structure).
             -->
             <tb:TaskbarIcon.ContextMenu>
@@ -68,6 +67,7 @@
                     <MenuItem Header="Start new task…" Command="{Binding StartYoloTaskCommand}" />
                     <MenuItem Header="Session history…" Command="{Binding ShowSessionHistoryCommand}" />
                     <MenuItem Header="Cycle demo data" Command="{Binding CycleDemoScenarioCommand}" />
+                    <MenuItem Header="Preview notifications" Command="{Binding ShowDemoBalloonsCommand}" />
                     <Separator />
                     <MenuItem Header="Mute notifications" IsCheckable="True" IsChecked="{Binding IsMuted, Mode=TwoWay}" />
                     <MenuItem Header="Run at startup" IsCheckable="True" IsChecked="{Binding RunAtStartupEnabled, Mode=TwoWay}" />
@@ -89,9 +89,8 @@
 
         <!--
             Watermark (2026-10-02, see IMPLEMENTATION_PLAN.md §9.4/§9.5) — the same Guanyin
-            artwork as the tray icon's own glyph (though the tray icon itself moved to a
-            composited glyph+ring on 2026-10-06 — see MainWindow.xaml.cs's
-            ComposeTrayIconBitmap — this watermark's own green/gold/gray full-image swap via
+            artwork as the tray icon's own glyph (though the tray icon itself is drawn separately
+            by TrayIconRenderer — this watermark's own green/gold/gray full-image swap via
             TrayViewModel.WatermarkImageSource is unchanged), purely decorative/branding behind the
             session list and empty-state text. Declared before (so behind, in z-order) the
             ListBox/empty-state TextBlock below, both of which keep a transparent background

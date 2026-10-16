@@ -98,11 +98,25 @@ public sealed class SessionHistoryStore : ISessionHistoryStore
 
     public async Task<IReadOnlyList<SessionCheckpoint>> GetCheckpointsAsync(string sessionId, CancellationToken cancellationToken = default)
     {
+        try
+        {
+            return await ReadCheckpointsAsync(sessionId, includeNextSteps: true, cancellationToken).ConfigureAwait(false);
+        }
+        catch (SqliteException ex) when (ex.Message.Contains("no such column", StringComparison.OrdinalIgnoreCase))
+        {
+            return await ReadCheckpointsAsync(sessionId, includeNextSteps: false, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<IReadOnlyList<SessionCheckpoint>> ReadCheckpointsAsync(
+        string sessionId, bool includeNextSteps, CancellationToken cancellationToken)
+    {
         return await ExecuteWithRetryAsync(async connection =>
         {
             using var command = connection.CreateCommand();
             command.CommandText =
-                "SELECT session_id, checkpoint_number, title, overview, created_at " +
+                "SELECT session_id, checkpoint_number, title, overview, created_at" +
+                (includeNextSteps ? ", next_steps " : " ") +
                 "FROM checkpoints WHERE session_id = $id ORDER BY checkpoint_number";
             command.Parameters.AddWithValue("$id", sessionId);
 
@@ -115,7 +129,8 @@ public sealed class SessionHistoryStore : ISessionHistoryStore
                     CheckpointNumber: reader.GetInt32(1),
                     Title: reader.IsDBNull(2) ? null : reader.GetString(2),
                     Overview: reader.IsDBNull(3) ? null : reader.GetString(3),
-                    CreatedAtUtc: DateTimeOffset.Parse(reader.GetString(4))));
+                    CreatedAtUtc: DateTimeOffset.Parse(reader.GetString(4)),
+                    NextSteps: includeNextSteps && !reader.IsDBNull(5) ? reader.GetString(5) : null));
             }
 
             return (IReadOnlyList<SessionCheckpoint>)results;

@@ -6,8 +6,8 @@ namespace CopilotSessionTray.Core.Models;
 /// finishes.
 /// </summary>
 /// <param name="SessionId">The session this notification is about.</param>
-/// <param name="Title">Short title, e.g. repository/folder name + short session id.</param>
-/// <param name="Body">Truncated summary, e.g. latest assistant message or checkpoint title.</param>
+/// <param name="Title">The session's title (falling back to its repository or folder, then its short id).</param>
+/// <param name="Body">A one-line, plain-text snippet of what the session reported when it finished, e.g. its <c>task_complete</c> summary or last assistant message.</param>
 /// <param name="ElapsedWorking">How long the session was actively working before finishing, if known.</param>
 public sealed record SessionNotification(
     string SessionId,

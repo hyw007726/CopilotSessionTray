@@ -11,9 +11,8 @@ namespace CopilotSessionTray.App.ViewModels;
 /// <b>2026-10-05 (IMPLEMENTATION_PLAN.md §9.6):</b> this enum used to be computed every poll but
 /// never actually read by anything — <c>TrayViewModel</c>'s tray-icon/watermark rendering each
 /// independently reimplemented their own <c>IsAnyWorking</c> checks. It's now the single,
-/// authoritative source of truth those switch over instead (the actual Win32 tray icon was
-/// redesigned 2026-10-06 to a composited glyph+ring — see <c>MainWindow.xaml.cs</c>'s
-/// <c>ComposeTrayIconBitmap</c> — driven directly off <c>TrayViewModel.IsAnyWorking</c> rather
+/// authoritative source of truth those switch over instead (the actual Win32 tray icon is drawn
+/// by <c>TrayIconRenderer</c>, driven directly off <c>TrayViewModel.IsAnyWorking</c> rather
 /// than this enum, but <c>TrayViewModel.WatermarkImageSource</c> — the popup's background art —
 /// still switches over this). <see cref="WaitingForInput"/> is a kept-but-unimplemented stub —
 /// see its own doc comment.

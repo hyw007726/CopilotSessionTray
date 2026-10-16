@@ -72,6 +72,7 @@ public sealed partial class TrayViewModel : ObservableObject
     private readonly IProcessLivenessChecker _liveProcessChecker;
     private readonly ISessionHistoryStore _liveHistoryStore;
     private readonly SessionLockFileInspector _liveLockFileInspector;
+    private readonly SessionSummaryProvider _summaryProvider;
 
     // Real, working process-launch logic (resume/start-from-summary/start-new-task), and real,
     // working persistence (read/dismissed markers, custom display names, remembered workspace
@@ -101,6 +102,7 @@ public sealed partial class TrayViewModel : ObservableObject
         IProcessLivenessChecker liveProcessChecker,
         ISessionHistoryStore liveHistoryStore,
         SessionLockFileInspector liveLockFileInspector,
+        SessionSummaryProvider summaryProvider,
         ISessionLauncher sessionLauncher,
         IYoloTaskRunner yoloTaskRunner,
         IAppStateStore appStateStore,
@@ -111,6 +113,7 @@ public sealed partial class TrayViewModel : ObservableObject
         _liveProcessChecker = liveProcessChecker;
         _liveHistoryStore = liveHistoryStore;
         _liveLockFileInspector = liveLockFileInspector;
+        _summaryProvider = summaryProvider;
         _sessionLauncher = sessionLauncher;
         _yoloTaskRunner = yoloTaskRunner;
         _appStateStore = appStateStore;
@@ -148,10 +151,15 @@ public sealed partial class TrayViewModel : ObservableObject
             return;
         }
 
-        _ = LoadLiveSessionsScenarioAsync();
+        _ = LoadLiveSessionsThenPollAsync();
         _ = LoadMutePreferenceAsync();
         _monitorTimer.Start();
-        _ = OnMonitorTimerTickAsync(); // poll once immediately rather than waiting a full interval.
+    }
+
+    private async Task LoadLiveSessionsThenPollAsync()
+    {
+        await LoadLiveSessionsScenarioAsync();
+        await OnMonitorTimerTickAsync();
     }
 
     /// <summary>Loads the persisted mute preference at startup — otherwise <see cref="IsMuted"/> would always reset to its default (false) on every launch.</summary>
@@ -208,10 +216,10 @@ public sealed partial class TrayViewModel : ObservableObject
     /// (2026-10-02/05, see IMPLEMENTATION_PLAN.md §9.5/§9.6) — applied to a plain WPF
     /// <c>Image.Source</c> binding in <c>MainWindow.xaml</c> rather than anything touching
     /// <c>H.NotifyIcon</c>/<c>GeneratedIconSource</c>. This is deliberately a completely different
-    /// code path from the tray icon's own rendering (the actual Win32 tray icon is now composited
-    /// directly in <c>MainWindow.xaml.cs</c>'s <c>ComposeTrayIconBitmap</c> — see its own doc
-    /// comment — rather than driven from any property here, as of the 2026-10-06 glyph+ring+dot
-    /// redesign): a plain <see cref="System.Windows.Controls.Image"/> swapping a pre-loaded,
+    /// code path from the tray icon's own rendering (the actual Win32 tray icon is drawn directly
+    /// by <c>TrayIconRenderer</c>, called from <c>MainWindow.xaml.cs</c>'s <c>UpdateTrayIcon</c> —
+    /// see its own doc comment — rather than driven from any property here): a plain
+    /// <see cref="System.Windows.Controls.Image"/> swapping a pre-loaded,
     /// <c>Freeze()</c>-d <see cref="BitmapImage"/> is standard, synchronous WPF image binding with
     /// no GDI+ interop and no async regeneration involved at all — so none of the concurrency
     /// risk documented on that method applies here, however often this property changes.
@@ -398,8 +406,44 @@ public sealed partial class TrayViewModel : ObservableObject
             return;
         }
 
+        await RefreshSummaryAsync(session);
+
         await TryLaunchAsync(
             () => _sessionLauncher.StartNewSessionFromSummaryAsync(session.Summary, session.WorkingDirectory), session.Id);
+    }
+
+    /// <summary>
+    /// Re-reads a live session's summary and title from the history store. A read that yields less
+    /// than the row already has (e.g. the database was briefly locked) is ignored.
+    /// </summary>
+    private async Task RefreshSummaryAsync(SessionItemViewModel session)
+    {
+        if (!IsShowingLiveData)
+        {
+            return;
+        }
+
+        SessionSummary? row = null;
+        try
+        {
+            row = await _liveHistoryStore.GetSessionAsync(session.Id);
+        }
+        catch (Exception)
+        {
+            row = null;
+        }
+
+        var details = await _summaryProvider.GetAsync(session.Id, row);
+        if (session.SummaryView is { } current && details.View.Source < current.Source)
+        {
+            return;
+        }
+
+        session.UpdateSummary(details.ResumeText, details.View);
+        if (row is not null && ToDisplayText(details.Title) is { } title)
+        {
+            session.DisplayName = await ApplyCustomDisplayNameOverrideAsync(session.Id, title);
+        }
     }
 
     /// <summary>
@@ -415,6 +459,7 @@ public sealed partial class TrayViewModel : ObservableObject
             return;
         }
 
+        await RefreshSummaryAsync(session);
         var originalDisplayName = session.DisplayName;
         new SessionSummaryWindow(session) { Owner = TryGetOwnerWindow() }.ShowDialog();
 
@@ -572,6 +617,23 @@ public sealed partial class TrayViewModel : ObservableObject
     }
 
     [RelayCommand]
+    private async Task ShowDemoBalloons()
+    {
+        var samples = new[]
+        {
+            new SessionNotification("demo-balloon-1", "acme/widget-api", "Fixed the flaky retry test by awaiting the cleanup hook; all 42 checkout tests pass.", TimeSpan.FromMinutes(12)),
+            new SessionNotification("demo-balloon-2", "sample-org/inventory-service", "Added the missing test fixture reference and re-ran the suite.", TimeSpan.FromMinutes(3) + TimeSpan.FromSeconds(20)),
+            new SessionNotification("demo-balloon-3", "octocat/hello-world", "Blocked: needs your approval before pushing to the protected branch.", TimeSpan.FromHours(1) + TimeSpan.FromMinutes(5)),
+        };
+
+        foreach (var sample in samples)
+        {
+            await _notificationService.NotifySessionFinishedAsync(sample);
+            await Task.Delay(500);
+        }
+    }
+
+    [RelayCommand]
     private void Quit() => Application.Current.Shutdown();
 
     /// <summary>
@@ -643,7 +705,7 @@ public sealed partial class TrayViewModel : ObservableObject
                 continue; // user removed this one; don't let a reload bring it straight back.
             }
 
-            Sessions.Add(await BuildOpenSessionItemAsync(entry, now));
+            AddSessionIfNew(await BuildOpenSessionItemAsync(entry, now));
         }
 
         // Also append the most recent genuinely-closed sessions below the open ones — same
@@ -667,8 +729,10 @@ public sealed partial class TrayViewModel : ObservableObject
                     continue; // removed; don't let it re-fill the 10-slot quota after a reload.
                 }
 
-                Sessions.Add(await BuildClosedSessionItemAsync(summary, now));
-                closedCount++;
+                if (AddSessionIfNew(await BuildClosedSessionItemAsync(summary, now)))
+                {
+                    closedCount++;
+                }
             }
         }
         catch
@@ -705,12 +769,13 @@ public sealed partial class TrayViewModel : ObservableObject
         }
 
         var shortId = entry.SessionId.Length > 8 ? entry.SessionId[..8] : entry.SessionId;
-        var computedName = summary?.Summary ?? summary?.Repository ?? summary?.Cwd ?? $"Session {shortId}…";
+        var details = await _summaryProvider.GetAsync(entry.SessionId, summary);
+        var computedName = ToDisplayText(details.Title) ?? summary?.Repository ?? summary?.Cwd ?? $"Session {shortId}…";
         var displayName = await ApplyCustomDisplayNameOverrideAsync(entry.SessionId, computedName);
         var detail = summary?.Cwd is { Length: > 0 } cwd
             ? $"{cwd} · opened {FormatAge(now - entry.OpenedAtUtc)} ago"
             : $"Opened {FormatAge(now - entry.OpenedAtUtc)} ago.";
-        var realSummary = await GetResumeSummaryAsync(entry.SessionId, summary?.Summary);
+        detail = await AppendOriginAsync(detail, details.OriginSessionId);
 
         return new SessionItemViewModel(
             entry.SessionId,
@@ -719,7 +784,8 @@ public sealed partial class TrayViewModel : ObservableObject
             detail,
             now - entry.RefreshedAtUtc,
             workingDirectory: summary?.Cwd,
-            realSummary: realSummary);
+            realSummary: details.ResumeText,
+            summaryView: details.View);
     }
 
     /// <summary>
@@ -736,171 +802,26 @@ public sealed partial class TrayViewModel : ObservableObject
     private async Task<SessionItemViewModel> BuildClosedSessionItemAsync(SessionSummary summary, DateTimeOffset now)
     {
         var shortId = summary.Id.Length > 8 ? summary.Id[..8] : summary.Id;
-        var computedName = summary.Summary ?? summary.Repository ?? summary.Cwd ?? $"Session {shortId}…";
+        var details = await _summaryProvider.GetAsync(summary.Id, summary);
+        var computedName = ToDisplayText(details.Title) ?? summary.Repository ?? summary.Cwd ?? $"Session {shortId}…";
         var displayName = await ApplyCustomDisplayNameOverrideAsync(summary.Id, computedName);
-        var detail = summary.Cwd ?? summary.Repository ?? "(unknown workspace)";
-        var realSummary = await GetResumeSummaryAsync(summary.Id, summary.Summary);
+        var detail = await AppendOriginAsync(summary.Cwd ?? summary.Repository ?? "(unknown workspace)", details.OriginSessionId);
         return new SessionItemViewModel(
             summary.Id, displayName, SessionStatus.Closed, detail, now - summary.UpdatedAtUtc,
-            workingDirectory: summary.Cwd, realSummary: realSummary);
+            workingDirectory: summary.Cwd, realSummary: details.ResumeText, summaryView: details.View);
     }
 
-    /// <summary>
-    /// Resolves the real text to seed a "Resume with Summary" new session with — per
-    /// <c>ISessionLauncher.StartNewSessionFromSummaryAsync</c>'s always-documented intent: the
-    /// session's most recent <see cref="SessionCheckpoint.Overview"/> (Copilot CLI already writes
-    /// these during a session — confirmed real, substantive content via a real session's own
-    /// checkpoints while fixing this). Falls back, in order, to a recap built from the session's
-    /// own real <see cref="SessionTurn"/> history (see <see cref="BuildTurnsFallbackSummary"/>),
-    /// then its bare title/summary field, and finally a plain "no summary yet" message.
-    ///
-    /// Fixes a real 2026-10-01 bug: despite that interface doc comment always describing this
-    /// design, nothing ever actually called <see cref="ISessionHistoryStore.GetCheckpointsAsync"/>
-    /// — <c>SessionItemViewModel</c>'s constructor instead *always* fabricated a templated
-    /// sentence from the display name/detail/status, even for real sessions, producing nonsense
-    /// like "Summary of prior work on Architect: C:\Git (last status: Closed)." — which read like
-    /// a wrong/garbled working directory but was actually just a fake Phase 1 placeholder string
-    /// that had leaked into real usage once real data was wired up.
-    ///
-    /// Second bug, same day: that first fix still produced a near-useless prompt
-    /// ("Summarize Architect Work") when resuming a session that has <em>no checkpoint at all</em>
-    /// — many short sessions never reach one — since it fell straight through to the session's
-    /// bare auto-generated title, which carries essentially no real content for a brand new
-    /// session (with zero prior context) to act on; confirmed directly against the real session
-    /// this happened for (a short, single-turn session whose only real content — a user message
-    /// and the assistant's one reply — was never being read at all). Fixed by trying a real
-    /// <see cref="ISessionHistoryStore.GetTurnsAsync"/>-based recap first in that case, so even a
-    /// session with no checkpoint still forwards its actual first question and most recent answer
-    /// — directly from the session's own history — rather than just a short disconnected label.
-    ///
-    /// Third fix, same feature: the result never carried the original session's own identity
-    /// forward at all — reported directly against a real Copilot CLI screenshot showing its own
-    /// <c>/resume</c> tip ("Switch sessions by local or cloud history ID, task ID, or name") right
-    /// above a freshly-resumed-with-summary session with none of those three things visible
-    /// anywhere. Every tier below now runs its result through
-    /// <see cref="BuildSummaryWithProvenanceHeader"/>, which prepends the real session id (and
-    /// title, if known) plus an explicit <c>/resume &lt;id&gt;</c> hint — so a human reading the
-    /// new session's transcript (or the summary panel, which shares this same text) can always
-    /// trace it back to, or jump straight into, the original, regardless of which fallback tier
-    /// produced the body underneath it.
-    ///
-    /// Truncated defensively: unlike a checkpoint overview (consistently a few hundred/thousand
-    /// characters in every real checkpoint inspected), the <paramref name="fallbackSummary"/> this
-    /// falls back to can occasionally be a session's entire raw system prompt verbatim (observed
-    /// for some automated/scripted session types) — many KB of text would overflow cmd.exe's
-    /// ~8191-character single-line limit once embedded in the generated launch script's
-    /// <c>copilot -i "..."</c> line, silently breaking the launch. Truncation is applied to the
-    /// body only, before the (always-short) provenance header is added on top.
-    /// </summary>
-    private async Task<string> GetResumeSummaryAsync(string sessionId, string? fallbackSummary)
+    private async Task<string> AppendOriginAsync(string detail, string? originSessionId)
     {
-        try
+        if (originSessionId is null)
         {
-            var checkpoints = await _liveHistoryStore.GetCheckpointsAsync(sessionId);
-            var latestOverview = checkpoints.Count > 0 ? checkpoints[^1].Overview : null;
-            if (!string.IsNullOrWhiteSpace(latestOverview))
-            {
-                return BuildSummaryWithProvenanceHeader(sessionId, fallbackSummary, TruncateForResumePrompt(latestOverview));
-            }
-        }
-        catch
-        {
-            // checkpoints table read failed (e.g. momentarily locked) — fall through to the
-            // turns-based recap below rather than fail the whole row over it.
+            return detail;
         }
 
-        try
-        {
-            var turns = await _liveHistoryStore.GetTurnsAsync(sessionId);
-            var turnsRecap = BuildTurnsFallbackSummary(turns);
-            if (!string.IsNullOrWhiteSpace(turnsRecap))
-            {
-                return BuildSummaryWithProvenanceHeader(sessionId, fallbackSummary, TruncateForResumePrompt(turnsRecap));
-            }
-        }
-        catch
-        {
-            // turns table read failed — fall through to the bare title/summary field below.
-        }
-
-        var body = string.IsNullOrWhiteSpace(fallbackSummary)
-            ? "No summary is available for this session yet."
-            : TruncateForResumePrompt(fallbackSummary);
-        return BuildSummaryWithProvenanceHeader(sessionId, fallbackSummary, body);
+        var originTitle = ToDisplayText(await _summaryProvider.GetTitleAsync(originSessionId))
+            ?? (originSessionId.Length > 8 ? originSessionId[..8] : originSessionId);
+        return $"{detail} · ↪ resumed from \"{SessionText.ToSingleLine(originTitle, MaxOriginTitleLength)}\"";
     }
-
-    /// <summary>
-    /// Prepends a short, always-present header identifying the real originating session —
-    /// id (the same value this app's own "⤴ Resume" → "Resume with history" action already passes
-    /// to <c>copilot --resume=&lt;id&gt;</c>, so it's confirmed resumable this same way via the
-    /// real Copilot CLI's own <c>/resume &lt;id&gt;</c> slash command too) and title/name, if
-    /// known — to <paramref name="body"/> (whatever <see cref="GetResumeSummaryAsync"/>'s fallback
-    /// tier produced). Addresses the user's 2026-10-01 report, with a real screenshot of Copilot
-    /// CLI's own <c>/resume</c> tip, that a resumed-with-summary session carried no trace of
-    /// "history ID, task ID, or name" at all — this app only has the first of those three
-    /// (CLI "task"/cloud-agent ids are a different, cloud-side concept this app's local-only scope
-    /// never reads), so that's what's surfaced. Framed explicitly as context <em>about</em> the
-    /// prompt (not part of it) so the receiving agent reads it as background, not an instruction
-    /// to act on immediately — and so a human skimming the transcript later can copy the id
-    /// straight into a fresh <c>/resume</c> without parsing prose to find it.
-    /// </summary>
-    private static string BuildSummaryWithProvenanceHeader(string sessionId, string? title, string body)
-    {
-        // The title is meant to be a short identifying label, not content — but the real
-        // SessionSummary.Summary field reused as this parameter can itself occasionally be a
-        // session's entire raw system prompt verbatim (see the class's own remarks on
-        // fallbackSummary above). Bounded separately and far more tightly than the body's own
-        // TruncateForResumePrompt, so that same edge case can't sneak an unbounded multi-KB blob
-        // back in through this "title" path instead.
-        const int maxTitleLength = 80;
-        var trimmedTitle = title?.Trim();
-        var titleSuffix = string.IsNullOrWhiteSpace(trimmedTitle)
-            ? string.Empty
-            : $", titled \"{(trimmedTitle!.Length <= maxTitleLength ? trimmedTitle : trimmedTitle[..maxTitleLength] + "…")}\"";
-
-        var header = $"[Context: this is a condensed summary of an earlier Copilot CLI session{titleSuffix} " +
-            $"(id: {sessionId}). It is not itself part of this request — if the full original conversation " +
-            $"is ever needed, it can be resumed directly with `/resume {sessionId}`.]";
-        return $"{header}{Environment.NewLine}{Environment.NewLine}{body}";
-    }
-
-    /// <summary>
-    /// Builds a short recap directly from a session's real <see cref="SessionTurn"/> history, for
-    /// <see cref="GetResumeSummaryAsync"/>'s middle fallback tier (sessions with real conversation
-    /// but no checkpoint yet) — the first turn's user message (what was actually asked) plus the
-    /// last turn's assistant response (the most recent real outcome), rather than every turn
-    /// verbatim, which could be large for a long, checkpoint-less session. Returns null if there
-    /// are no turns, or if every turn is completely empty, so the caller can fall through to its
-    /// own next tier instead of seeding a new session with just whitespace/an empty string.
-    /// </summary>
-    private static string? BuildTurnsFallbackSummary(IReadOnlyList<SessionTurn> turns)
-    {
-        if (turns.Count == 0)
-        {
-            return null;
-        }
-
-        var firstUserMessage = turns[0].UserMessage;
-        var lastAssistantResponse = turns[^1].AssistantResponse;
-
-        var parts = new List<string>();
-        if (!string.IsNullOrWhiteSpace(firstUserMessage))
-        {
-            parts.Add($"Originally asked: {firstUserMessage}");
-        }
-
-        if (!string.IsNullOrWhiteSpace(lastAssistantResponse))
-        {
-            parts.Add($"Most recent outcome: {lastAssistantResponse}");
-        }
-
-        return parts.Count > 0 ? string.Join(Environment.NewLine + Environment.NewLine, parts) : null;
-    }
-
-    private const int MaxResumeSummaryLength = 4000;
-
-    private static string TruncateForResumePrompt(string text) =>
-        text.Length <= MaxResumeSummaryLength ? text : text[..MaxResumeSummaryLength] + " … (truncated)";
 
     /// <summary>Returns the user's persisted local rename for a session, if any, otherwise <paramref name="fallbackDisplayName"/>.</summary>
     private async Task<string> ApplyCustomDisplayNameOverrideAsync(string sessionId, string fallbackDisplayName)
@@ -908,6 +829,14 @@ public sealed partial class TrayViewModel : ObservableObject
         var customName = await _appStateStore.GetCustomDisplayNameAsync(sessionId);
         return string.IsNullOrEmpty(customName) ? fallbackDisplayName : customName;
     }
+
+    private const int MaxDisplayTextLength = 200;
+    private const int MaxOriginTitleLength = 60;
+    private const int MaxOutcomeLength = 240;
+    private static readonly TimeSpan MinimumNotifiableWork = TimeSpan.FromSeconds(30);
+
+    private static string? ToDisplayText(string? text) =>
+        string.IsNullOrWhiteSpace(text) ? null : SessionText.ToSingleLine(text, MaxDisplayTextLength);
 
     private static string FormatAge(TimeSpan age) => age switch
     {
@@ -961,7 +890,7 @@ public sealed partial class TrayViewModel : ObservableObject
             case 3: // Empty.
                 break;
 
-            case 4: // Actively working — exercises the tray icon's "working" ring.
+            case 4: // Actively working — exercises the tray icon's "working" glow.
                 Sessions.Add(new SessionItemViewModel(
                     "demo-7", "sample-org/notification-service", SessionStatus.Working,
                     "Refactoring retry policy configuration…", TimeSpan.FromSeconds(45)));
@@ -979,6 +908,8 @@ public sealed partial class TrayViewModel : ObservableObject
     /// </summary>
     private async Task OnMonitorTimerTickAsync()
     {
+        RefreshElapsedLabels();
+
         if (_isPolling)
         {
             return; // previous tick's poll is still running (e.g. a slow SQLite read) —
@@ -1046,6 +977,11 @@ public sealed partial class TrayViewModel : ObservableObject
             return;
         }
 
+        if (change.WorkedFor is { } worked && worked < MinimumNotifiableWork)
+        {
+            return;
+        }
+
         SessionSummary? summary = null;
         try
         {
@@ -1058,13 +994,15 @@ public sealed partial class TrayViewModel : ObservableObject
         }
 
         var shortId = change.SessionId.Length > 8 ? change.SessionId[..8] : change.SessionId;
-        var title = summary?.Repository ?? summary?.Cwd ?? $"Session {shortId}…";
-        var body = summary?.Summary ?? "Finished a turn and is waiting for input.";
+        var title = ToDisplayText(await _summaryProvider.GetTitleAsync(change.SessionId, summary))
+            ?? summary?.Repository ?? summary?.Cwd ?? $"Session {shortId}…";
+        var outcome = change.Outcome is null ? string.Empty : SessionText.ToPlainSnippet(change.Outcome, MaxOutcomeLength);
+        var body = outcome.Length > 0 ? outcome : "Finished a turn and is waiting for input.";
 
         try
         {
             await _notificationService.NotifySessionFinishedAsync(
-                new SessionNotification(change.SessionId, title, body, ElapsedWorking: null));
+                new SessionNotification(change.SessionId, title, body, change.WorkedFor));
         }
         catch
         {
@@ -1104,8 +1042,7 @@ public sealed partial class TrayViewModel : ObservableObject
                                     // the same source moments ago) — skip defensively rather than guess.
                 }
 
-                Sessions.Insert(0, await BuildOpenSessionItemAsync(entry, now));
-                return true;
+                return AddSessionIfNew(await BuildOpenSessionItemAsync(entry, now), atTop: true);
 
             case SessionChangeKind.WorkingStateChanged:
                 if (existing is null)
@@ -1138,6 +1075,39 @@ public sealed partial class TrayViewModel : ObservableObject
 
             default:
                 return false;
+        }
+    }
+
+    private bool AddSessionIfNew(SessionItemViewModel item, bool atTop = false)
+    {
+        if (Sessions.Any(session => session.Id == item.Id))
+        {
+            return false;
+        }
+
+        if (atTop)
+        {
+            Sessions.Insert(0, item);
+        }
+        else
+        {
+            Sessions.Add(item);
+        }
+
+        return true;
+    }
+
+    private void RefreshElapsedLabels()
+    {
+        if (!IsShowingLiveData)
+        {
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        foreach (var session in Sessions)
+        {
+            session.RefreshElapsed(now);
         }
     }
 

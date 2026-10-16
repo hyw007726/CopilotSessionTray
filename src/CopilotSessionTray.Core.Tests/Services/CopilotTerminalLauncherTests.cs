@@ -1,12 +1,14 @@
+using System.Diagnostics;
+using System.Text;
 using CopilotSessionTray.Core.Services;
 
 namespace CopilotSessionTray.Core.Tests.Services;
 
 /// <summary>
-/// Exercises the pure-logic parts of <see cref="CopilotTerminalLauncher"/> — script-content
-/// building and cmd.exe-safe sanitization — without ever writing a file or starting a process.
-/// Accessible here via <c>InternalsVisibleTo</c> (see Core.csproj) since these are deliberately
-/// not part of Core's public API.
+/// Exercises <see cref="CopilotTerminalLauncher"/> — script-content building and cmd.exe-safe
+/// sanitization — and, for the argument-delivery tests, runs the generated script for real against
+/// a stub <c>copilot.cmd</c>. Accessible here via <c>InternalsVisibleTo</c> (see Core.csproj)
+/// since these are deliberately not part of Core's public API.
 /// </summary>
 public sealed class CopilotTerminalLauncherTests
 {
@@ -39,6 +41,36 @@ public sealed class CopilotTerminalLauncherTests
 
         Assert.Contains("\u001b]11;#3d0e0e\u0007", content);
         Assert.True(content.IndexOf('\u001b') < content.IndexOf("copilot --resume", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void BuildLaunchScriptContent_SwitchesToTheUtf8CodePage_BeforeTheCopilotInvocation()
+    {
+        var content = CopilotTerminalLauncher.BuildLaunchScriptContent("--resume=abc123", enableAllPermissions: false, "1a1a2e");
+
+        var codePageIndex = content.IndexOf("chcp 65001 >nul", StringComparison.Ordinal);
+        Assert.True(codePageIndex > content.IndexOf("@echo off", StringComparison.Ordinal));
+        Assert.True(codePageIndex < content.IndexOf("copilot --resume", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void GeneratedLaunchScript_DeliversNonAsciiArgumentsIntact_EvenFromAnOemCodePageConsole()
+    {
+        const string text = "em dash — ellipsis … middle dot · accent é cjk 日本 emoji 🙂";
+
+        var arguments = RunGeneratedLaunchScriptAgainstStubCopilot($"-i \"{text}\"");
+
+        Assert.Equal(new[] { "-i", text }, arguments);
+    }
+
+    [Fact]
+    public void GeneratedLaunchScript_DeliversPercentSignsLiterally_ForSanitizedText()
+    {
+        const string text = "has 100% coverage, %PATH% and %1 and %~dp0 stay literal";
+
+        var arguments = RunGeneratedLaunchScriptAgainstStubCopilot($"-i \"{CopilotTerminalLauncher.SanitizeForCmdExe(text)}\"");
+
+        Assert.Equal(new[] { "-i", text }, arguments);
     }
 
     [Fact]
@@ -89,7 +121,7 @@ public sealed class CopilotTerminalLauncherTests
     [Theory]
     [InlineData("simple text", "simple text")]
     [InlineData("has \"quotes\" inside", "has 'quotes' inside")]
-    [InlineData("has 100% coverage", "has 100_ coverage")]
+    [InlineData("has 100% coverage", "has 100%% coverage")]
     [InlineData("line one\r\nline two", "line one  line two")]
     [InlineData("line one\nline two", "line one line two")]
     public void SanitizeForCmdExe_ReplacesUnsafeCharacters(string input, string expected)
@@ -103,5 +135,47 @@ public sealed class CopilotTerminalLauncherTests
         const string safe = "Investigate the flaky retry logic in checkout, then report back.";
 
         Assert.Equal(safe, CopilotTerminalLauncher.SanitizeForCmdExe(safe));
+    }
+
+    private static string[] RunGeneratedLaunchScriptAgainstStubCopilot(string copilotArguments)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"copilot-launch-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var capturePath = Path.Combine(directory, "captured.txt");
+            var capturePs1Path = Path.Combine(directory, "capture.ps1");
+            var scriptPath = Path.Combine(directory, "launch.cmd");
+            var wrapperPath = Path.Combine(directory, "wrapper.cmd");
+
+            File.WriteAllText(
+                capturePs1Path,
+                $"[System.IO.File]::WriteAllText('{capturePath.Replace("'", "''")}', ($args -join \"`n\"), (New-Object System.Text.UTF8Encoding($false)))");
+            File.WriteAllText(
+                Path.Combine(directory, "copilot.cmd"),
+                $"@echo off\r\npowershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{capturePs1Path}\" %*\r\n");
+            File.WriteAllText(
+                scriptPath,
+                CopilotTerminalLauncher.BuildLaunchScriptContent(copilotArguments, enableAllPermissions: false, "1a1a2e"));
+            File.WriteAllText(
+                wrapperPath,
+                $"@echo off\r\nchcp 850 >nul\r\nset \"PATH={directory};%PATH%\"\r\ncall \"{scriptPath}\"\r\n");
+
+            var startInfo = new ProcessStartInfo("cmd.exe", $"/c \"\"{wrapperPath}\"\"")
+            {
+                WorkingDirectory = directory,
+                UseShellExecute = true,
+                WindowStyle = ProcessWindowStyle.Hidden,
+            };
+
+            using var process = Process.Start(startInfo)!;
+            Assert.True(process.WaitForExit(60_000), "The generated launch script did not finish.");
+
+            return File.ReadAllText(capturePath, Encoding.UTF8).Split('\n');
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 }

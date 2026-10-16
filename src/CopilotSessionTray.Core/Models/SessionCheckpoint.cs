@@ -8,9 +8,11 @@ namespace CopilotSessionTray.Core.Models;
 /// <param name="Title">Short checkpoint title, if any.</param>
 /// <param name="Overview">Longer checkpoint overview/summary, if any.</param>
 /// <param name="CreatedAtUtc">When this checkpoint was recorded.</param>
+/// <param name="NextSteps">The checkpoint's "next steps" section, if any.</param>
 public sealed record SessionCheckpoint(
     string SessionId,
     int CheckpointNumber,
     string? Title,
     string? Overview,
-    DateTimeOffset CreatedAtUtc);
+    DateTimeOffset CreatedAtUtc,
+    string? NextSteps = null);

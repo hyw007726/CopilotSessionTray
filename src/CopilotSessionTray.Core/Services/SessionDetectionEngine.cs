@@ -27,8 +27,9 @@ namespace CopilotSessionTray.Core.Services;
 /// if some exit path never emits an expected "turn ended" event (the exact bug that left GitHub's
 /// own official taskbar-presence feature stuck spinning forever — see
 /// <see href="https://github.com/github/copilot-cli/issues/4771"/>), the very next poll's registry
-/// read still reflects reality. <c>events.jsonl</c> is tailed purely for the
-/// <see cref="SessionChangeEvent.LatestEvent"/> enrichment detail, never to decide status.
+/// read still reflects reality. <c>events.jsonl</c> is tailed purely for enrichment — the
+/// <see cref="SessionChangeEvent.LatestEvent"/> detail and the outcome and duration a finished
+/// session reports — never to decide status.
 /// </para>
 /// <para>
 /// <see cref="SessionChangeKind"/> selection per still-open session, comparing this poll's
@@ -64,6 +65,9 @@ public sealed class SessionDetectionEngine : ISessionDetectionEngine
     /// <summary>Per-session <c>events.jsonl</c> tailing offset, so repeated polls don't re-read already-seen lines.</summary>
     private readonly Dictionary<string, long> _eventOffsets = new();
 
+    /// <summary>Per-session memory of what the session last reported and when its current work began.</summary>
+    private readonly Dictionary<string, SessionTurnTracker> _turns = new();
+
     public SessionDetectionEngine(
         IOpenSessionsRegistryReader registryReader,
         SessionLockFileInspector lockFileInspector,
@@ -95,7 +99,10 @@ public sealed class SessionDetectionEngine : ISessionDetectionEngine
 
         foreach (var (sessionId, entry) in genuinelyOpen)
         {
-            var latestEvent = await TryReadLatestEventAsync(sessionId, cancellationToken).ConfigureAwait(false);
+            var events = await TryReadEventsAsync(sessionId, cancellationToken).ConfigureAwait(false);
+            var latestEvent = events.Count > 0 ? events[^1] : null;
+            var tracker = GetTracker(sessionId);
+            tracker.Observe(events);
 
             if (!_tracked.TryGetValue(sessionId, out var previous))
             {
@@ -108,7 +115,8 @@ public sealed class SessionDetectionEngine : ISessionDetectionEngine
             if (previous.WasWorking && !entry.Working)
             {
                 _tracked[sessionId] = previous with { WasWorking = false };
-                changes.Add(new SessionChangeEvent(sessionId, SessionChangeKind.Finished, SessionStatus.Finished, now, latestEvent));
+                changes.Add(new SessionChangeEvent(
+                    sessionId, SessionChangeKind.Finished, SessionStatus.Finished, now, latestEvent, tracker.Outcome, tracker.WorkedFor));
             }
             else if (!previous.WasWorking && entry.Working)
             {
@@ -125,33 +133,47 @@ public sealed class SessionDetectionEngine : ISessionDetectionEngine
         foreach (var sessionId in _tracked.Keys.Where(id => !genuinelyOpen.ContainsKey(id)).ToList())
         {
             _tracked.Remove(sessionId);
-            var latestEvent = await TryReadLatestEventAsync(sessionId, cancellationToken).ConfigureAwait(false);
-            changes.Add(new SessionChangeEvent(sessionId, SessionChangeKind.Closed, SessionStatus.Closed, now, latestEvent));
+            _turns.Remove(sessionId);
+            var events = await TryReadEventsAsync(sessionId, cancellationToken).ConfigureAwait(false);
+            changes.Add(new SessionChangeEvent(
+                sessionId, SessionChangeKind.Closed, SessionStatus.Closed, now, events.Count > 0 ? events[^1] : null));
         }
 
         return changes;
     }
 
+    private SessionTurnTracker GetTracker(string sessionId)
+    {
+        if (!_turns.TryGetValue(sessionId, out var tracker))
+        {
+            tracker = new SessionTurnTracker();
+            _turns[sessionId] = tracker;
+        }
+
+        return tracker;
+    }
+
     /// <summary>
     /// Tails <paramref name="sessionId"/>'s <c>events.jsonl</c> from where the last call left off
-    /// and returns the most recent event read, if any — pure enrichment detail for
-    /// <see cref="SessionChangeEvent.LatestEvent"/>, never used to decide <see cref="SessionStatus"/>
-    /// itself (see the class doc comment's "signal authority" note). Swallows read failures (e.g.
-    /// the file being momentarily unavailable) since missing enrichment on one poll is harmless —
-    /// the caller still gets a correct status from the registry/process-liveness check either way.
+    /// and returns the events read, if any — pure enrichment detail for
+    /// <see cref="SessionChangeEvent.LatestEvent"/> and the outcome/duration a finished session
+    /// reports, never used to decide <see cref="SessionStatus"/> itself (see the class doc
+    /// comment's "signal authority" note). Swallows read failures (e.g. the file being
+    /// momentarily unavailable) since missing enrichment on one poll is harmless — the caller
+    /// still gets a correct status from the registry/process-liveness check either way.
     /// </summary>
-    private async Task<SessionEventRecord?> TryReadLatestEventAsync(string sessionId, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<SessionEventRecord>> TryReadEventsAsync(string sessionId, CancellationToken cancellationToken)
     {
         var fromOffset = _eventOffsets.TryGetValue(sessionId, out var offset) ? offset : 0;
         try
         {
             var result = await _eventStreamReader.ReadNewEventsAsync(sessionId, fromOffset, cancellationToken).ConfigureAwait(false);
             _eventOffsets[sessionId] = result.NextByteOffset;
-            return result.Events.Count > 0 ? result.Events[^1] : null;
+            return result.Events;
         }
         catch
         {
-            return null;
+            return Array.Empty<SessionEventRecord>();
         }
     }
 

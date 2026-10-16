@@ -10,14 +10,15 @@ detailed, in-progress tracking.
 ## Desktop pet mode
 
 Instead of (or alongside) a plain tray icon, render Copilot's state as a
-small animated on-screen character (idle/working/finished/attention-needed
-poses) that lives on the desktop rather than hiding in the tray. The
-existing `TrayAggregateState` (`NoSessions`/`Idle`/`Working`/
-`AttentionNeeded`) already models exactly the states such a character would
-react to, so the detection/state layer (`Core`) likely needs no changes at
-all — this would be a new, purely presentational `App`-layer view (probably
-a small transparent always-on-top window) alongside, not replacing, the
-tray icon.
+small animated on-screen character (idle/working/just-finished poses) that
+lives on the desktop rather than hiding in the tray. The existing
+`TrayAggregateState` (`NoSessions`/`Idle`/`Working` — `AttentionNeeded` was
+removed 2026-10-07 once the dismissable notification balloon took over
+that job; `WaitingForInput` remains an intentionally-unimplemented stub)
+already models the states such a character would react to, so the
+detection/state layer (`Core`) likely needs no changes at all — this would
+be a new, purely presentational `App`-layer view (probably a small
+transparent always-on-top window) alongside, not replacing, the tray icon.
 
 ## macOS version
 

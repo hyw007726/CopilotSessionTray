@@ -1,0 +1,104 @@
+<Window x:Class="CopilotSessionTray.App.BalloonWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Notification"
+        AllowsTransparency="True"
+        Background="Transparent"
+        WindowStyle="None"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        ShowActivated="False"
+        Topmost="True"
+        Focusable="False"
+        Cursor="Hand"
+        SizeToContent="WidthAndHeight"
+        WindowStartupLocation="Manual">
+    <Grid x:Name="Root"
+          Width="200"
+          Height="244"
+          Margin="34"
+          Opacity="0"
+          RenderTransformOrigin="0.5,0.69"
+          TextElement.FontFamily="Segoe UI">
+        <Grid.RenderTransform>
+            <TransformGroup>
+                <ScaleTransform x:Name="HoverScale" />
+                <ScaleTransform x:Name="PopScale" />
+                <RotateTransform x:Name="Tilt" />
+                <TranslateTransform x:Name="Drift" />
+            </TransformGroup>
+        </Grid.RenderTransform>
+
+        <Canvas>
+            <Path Data="M 100,168 C 92,182 110,194 100,206 C 93,217 106,228 99,242"
+                  Stroke="#55000000"
+                  StrokeThickness="2.6"
+                  StrokeStartLineCap="Round"
+                  StrokeEndLineCap="Round" />
+            <Path Data="M 100,168 C 92,182 110,194 100,206 C 93,217 106,228 99,242"
+                  Stroke="#E6D8D8D8"
+                  StrokeThickness="1.2"
+                  StrokeStartLineCap="Round"
+                  StrokeEndLineCap="Round" />
+            <Path x:Name="Knot"
+                  Data="M 100,155 C 97,158 91,164 89,170 L 111,170 C 109,164 103,158 100,155 Z" />
+            <Path x:Name="Body"
+                  StrokeThickness="0.8"
+                  Data="M 100,160 C 74,155 0,142 0,72 C 0,26 44,0 100,0 C 156,0 200,26 200,72 C 200,142 126,155 100,160 Z" />
+            <Ellipse Canvas.Left="30"
+                     Canvas.Top="20"
+                     Width="46"
+                     Height="24"
+                     RenderTransformOrigin="0.5,0.5"
+                     IsHitTestVisible="False">
+                <Ellipse.RenderTransform>
+                    <RotateTransform Angle="-38" />
+                </Ellipse.RenderTransform>
+                <Ellipse.Fill>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                        <GradientStop Color="#A6FFFFFF" Offset="0" />
+                        <GradientStop Color="#00FFFFFF" Offset="1" />
+                    </LinearGradientBrush>
+                </Ellipse.Fill>
+            </Ellipse>
+            <Ellipse Canvas.Left="62"
+                     Canvas.Top="13"
+                     Width="10"
+                     Height="6"
+                     Fill="#80FFFFFF"
+                     IsHitTestVisible="False" />
+            <Grid Canvas.Left="28"
+                  Canvas.Top="28"
+                  Width="144"
+                  Height="100">
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock x:Name="TitleText"
+                               MaxHeight="34"
+                               FontSize="13"
+                               FontWeight="Bold"
+                               LineHeight="17"
+                               LineStackingStrategy="BlockLineHeight"
+                               TextAlignment="Center"
+                               TextWrapping="Wrap"
+                               TextTrimming="CharacterEllipsis" />
+                    <TextBlock x:Name="BodyText"
+                               Margin="0,4,0,0"
+                               MaxHeight="30"
+                               FontSize="11"
+                               LineHeight="15"
+                               LineStackingStrategy="BlockLineHeight"
+                               TextAlignment="Center"
+                               TextWrapping="Wrap"
+                               TextTrimming="CharacterEllipsis" />
+                    <TextBlock x:Name="HintText"
+                               Margin="0,7,0,0"
+                               Text="Click to pop"
+                               FontSize="10"
+                               FontStyle="Italic"
+                               TextAlignment="Center"
+                               Opacity="0.78" />
+                </StackPanel>
+            </Grid>
+        </Canvas>
+    </Grid>
+</Window>

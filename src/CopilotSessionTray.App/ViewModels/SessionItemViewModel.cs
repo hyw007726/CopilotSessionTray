@@ -23,26 +23,20 @@ public sealed partial class SessionItemViewModel : ObservableObject
         string detail,
         TimeSpan elapsed,
         string? workingDirectory = null,
-        string? realSummary = null)
+        string? realSummary = null,
+        SessionSummaryView? summaryView = null)
     {
         Id = id;
         _displayName = displayName;
         _status = status;
         _detail = detail;
         _elapsed = elapsed;
+        _stateSinceUtc = DateTimeOffset.UtcNow - elapsed;
         WorkingDirectory = workingDirectory;
-
-        // realSummary is the real Copilot CLI checkpoint overview/session title text resolved by
-        // TrayViewModel.GetResumeSummaryAsync for real (non-demo) sessions — see that method's doc
-        // comment for the 2026-10-01 bug this fixes: this constructor used to *always* fabricate a
-        // templated sentence here regardless of whether real data was available, producing
-        // nonsense like "Summary of prior work on Architect: C:\Git (last status: Closed)." for
-        // real, closed sessions instead of an actual summary of what was worked on. Only demo rows
-        // (which never pass realSummary) still get that fabricated placeholder — fine for them
-        // since it's just exercising the UI with fake data to begin with.
-        Summary = !string.IsNullOrWhiteSpace(realSummary)
+        _summary = !string.IsNullOrWhiteSpace(realSummary)
             ? realSummary
             : $"Summary of prior work on {displayName}: {detail} (last status: {StatusLabelFor(status)}).";
+        _summaryView = summaryView;
     }
 
     public string Id { get; }
@@ -55,13 +49,28 @@ public sealed partial class SessionItemViewModel : ObservableObject
     public string? WorkingDirectory { get; }
 
     /// <summary>
-    /// For real sessions: the session's own most recent checkpoint overview (or, failing that,
-    /// its title/summary field) — genuine Copilot CLI-written content, this app never generates
-    /// it itself. For Phase 1 demo rows only: a fabricated placeholder sentence, since there's no
-    /// real checkpoint data behind a fake id. Fixed at construction, independent of any later
-    /// local rename via <see cref="DisplayName"/>.
+    /// For real sessions: the text built by <see cref="Core.Services.ResumeSummaryBuilder"/> —
+    /// the latest checkpoint (overview and next steps), else a recap of the first request and
+    /// latest reply, else the session title, behind a short header naming the original session.
+    /// This is the text a new session is seeded with, not what the summary panel shows (see
+    /// <see cref="SummaryView"/>). For Phase 1 demo rows only: a fabricated placeholder sentence.
+    /// Independent of any later local rename via <see cref="DisplayName"/>.
     /// </summary>
-    public string Summary { get; }
+    [ObservableProperty]
+    private string _summary;
+
+    /// <summary>
+    /// The same content as <see cref="Summary"/>, laid out for a person to read in the summary
+    /// panel. Null for Phase 1 demo rows, which only have the placeholder sentence.
+    /// </summary>
+    [ObservableProperty]
+    private SessionSummaryView? _summaryView;
+
+    internal void UpdateSummary(string summary, SessionSummaryView summaryView)
+    {
+        Summary = summary;
+        SummaryView = summaryView;
+    }
 
     /// <summary>
     /// This app's own local label for the session — renameable by the user
@@ -92,6 +101,20 @@ public sealed partial class SessionItemViewModel : ObservableObject
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ElapsedLabel))]
     private TimeSpan _elapsed;
+
+    private DateTimeOffset _stateSinceUtc;
+
+    /// <summary>Recomputes <see cref="Elapsed"/> as the time since the current state began.</summary>
+    internal void RefreshElapsed(DateTimeOffset now)
+    {
+        Elapsed = now > _stateSinceUtc ? now - _stateSinceUtc : TimeSpan.Zero;
+    }
+
+    partial void OnStatusChanged(SessionStatus value)
+    {
+        _stateSinceUtc = DateTimeOffset.UtcNow;
+        Elapsed = TimeSpan.Zero;
+    }
 
     public string StatusLabel => StatusLabelFor(Status);
 
@@ -130,11 +153,8 @@ public sealed partial class SessionItemViewModel : ObservableObject
     /// <c>TextBlock.Foreground</c> for the status/elapsed line in <c>MainWindow.xaml</c>, not just
     /// the small dot — see IMPLEMENTATION_PLAN.md §9.6). This per-row flat-color palette
     /// (green=working, gray=idle/finished/closed) is this app's own established state palette;
-    /// the actual Win32 tray icon no longer uses a matching flat color itself as of the
-    /// 2026-10-06 glyph+ring+dot redesign (see <c>MainWindow.xaml.cs</c>'s
-    /// <c>ComposeTrayIconBitmap</c>), but still uses the same green for its spinning "working"
-    /// ring, so the palette stays consistent across both surfaces even though the tray icon's
-    /// own shape changed.
+    /// the actual Win32 tray icon doesn't use it — it always shows the gold glyph drawn by
+    /// <c>TrayIconRenderer</c>, pulsing toward golden-white while any session is working.
     /// <see cref="SessionStatus.WaitingForInput"/> renders gray (not a distinct color) — see
     /// <see cref="StatusLabelFor"/>'s doc comment for why this status can't be confidently
     /// colorized/labeled any more specifically today.
