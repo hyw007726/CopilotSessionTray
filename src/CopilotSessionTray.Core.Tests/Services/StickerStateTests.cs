@@ -318,6 +318,10 @@ public sealed class StickerStateTests : IDisposable
         public Task<string?> GetCustomDisplayNameAsync(string sessionId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
         public Task SetCustomDisplayNameAsync(string sessionId, string? customDisplayName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<IReadOnlyList<string>?> GetPinnedSessionIdsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task SavePinnedSessionIdsAsync(IReadOnlyList<string> sessionIds, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 
     private sealed class ManualTimeProvider : TimeProvider

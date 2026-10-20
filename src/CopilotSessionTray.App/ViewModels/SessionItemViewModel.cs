@@ -103,10 +103,41 @@ public sealed partial class SessionItemViewModel : ObservableObject
     public bool IsWorking => Status == SessionStatus.Working;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(StickerButtonText))]
+    [NotifyPropertyChangedFor(nameof(StickerButtonToolTip))]
+    private bool _hasSticker;
+
+    /// <summary>The sticker was closed with its ✕ and stays hidden until the session next changes status.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(StickerButtonText))]
+    [NotifyPropertyChangedFor(nameof(StickerButtonToolTip))]
+    private bool _isStickerHidden;
+
+    partial void OnHasStickerChanged(bool value)
+    {
+        if (!value)
+        {
+            IsStickerHidden = false;
+        }
+    }
+
+    public string StickerButtonText => !HasSticker ? "🖥 Add sticker" : IsStickerHidden ? "🖥 Show sticker" : "🖥 Remove sticker";
+
+    public string StickerButtonToolTip => !HasSticker
+        ? "Put this session on your screen as a sticker"
+        : IsStickerHidden
+            ? "This sticker was closed with ✕ and returns when the session next changes. Click to show it now"
+            : "Remove this session's sticker from your screen";
+
+    [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(PinButtonText))]
+    [NotifyPropertyChangedFor(nameof(PinGlyphVisibility))]
     private bool _isPinned;
 
     public string PinButtonText => IsPinned ? "📌 Unpin" : "📌 Pin";
+
+    public System.Windows.Visibility PinGlyphVisibility =>
+        IsPinned ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
 
     [ObservableProperty]
     private string _gist = string.Empty;

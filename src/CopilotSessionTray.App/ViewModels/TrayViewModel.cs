@@ -122,6 +122,7 @@ public sealed partial class TrayViewModel : ObservableObject
         _detectionEngine = detectionEngine;
         _notificationService = notificationService;
         _stickerState = stickerState;
+        _sessionPins = new SessionPins(appStateStore);
 
         _monitorTimer = new DispatcherTimer { Interval = MonitorPollInterval };
         _monitorTimer.Tick += async (_, _) => await OnMonitorTimerTickAsync();
@@ -131,6 +132,7 @@ public sealed partial class TrayViewModel : ObservableObject
         // going through the real App.xaml.cs startup path) — the real app always immediately
         // replaces this with live data, below.
         Sessions = new ObservableCollection<SessionItemViewModel>();
+        SessionsView = CreateSessionsView(Sessions);
         LoadDemoScenario(0);
 
         // Read without going through the property setter so we don't
@@ -162,6 +164,7 @@ public sealed partial class TrayViewModel : ObservableObject
     private async Task LoadLiveSessionsThenPollAsync()
     {
         await LoadStickerStateAsync();
+        await LoadPinsAsync();
         await LoadLiveSessionsScenarioAsync();
         await OnMonitorTimerTickAsync();
     }
@@ -342,9 +345,11 @@ public sealed partial class TrayViewModel : ObservableObject
             return;
         }
 
+        var clearsKept = session.IsPinned || session.HasSticker;
         var result = MessageBox.Show(
             $"Remove '{session.DisplayName}' from this list?{Environment.NewLine}{Environment.NewLine}" +
-            "This only removes it from view here — it does not close or delete the real Copilot session.",
+            "This only removes it from view here — it does not close or delete the real Copilot session." +
+            (clearsKept ? $"{Environment.NewLine}{Environment.NewLine}It is pinned or has a sticker; removing it clears those too." : string.Empty),
             "Copilot Session Tray",
             MessageBoxButton.YesNo,
             MessageBoxImage.Question,
@@ -355,14 +360,25 @@ public sealed partial class TrayViewModel : ObservableObject
             return;
         }
 
+        await RemoveConfirmedAsync(session);
+    }
+
+    private async Task RemoveConfirmedAsync(SessionItemViewModel session)
+    {
         Sessions.Remove(session);
         RecomputeAggregateState();
 
         if (IsShowingLiveData)
         {
+            if (session.HasSticker)
+            {
+                SetSticker(session, false);
+            }
+
             if (session.IsPinned)
             {
-                SetPinned(session, false);
+                session.IsPinned = false;
+                await _sessionPins.SetPinnedAsync(session.Id, false);
             }
 
             await PersistReadMarkerAsync(session.Id, isDismissed: true);
@@ -736,9 +752,10 @@ public sealed partial class TrayViewModel : ObservableObject
             var closedCount = 0;
             foreach (var summary in recentSessions.Where(s => !openIds.Contains(s.Id)))
             {
-                if (closedCount >= 10)
+                var kept = IsKept(summary.Id);
+                if (closedCount >= 10 && !kept)
                 {
-                    break;
+                    continue;
                 }
 
                 var marker = await _appStateStore.GetReadMarkerAsync(summary.Id);
@@ -747,7 +764,7 @@ public sealed partial class TrayViewModel : ObservableObject
                     continue; // removed; don't let it re-fill the 10-slot quota after a reload.
                 }
 
-                if (AddSessionIfNew(await BuildClosedSessionItemAsync(summary, now)))
+                if (AddSessionIfNew(await BuildClosedSessionItemAsync(summary, now)) && !kept)
                 {
                     closedCount++;
                 }
@@ -1164,7 +1181,8 @@ public sealed partial class TrayViewModel : ObservableObject
             return false;
         }
 
-        item.IsPinned = _stickerState.IsPinned(item.Id);
+        item.IsPinned = _sessionPins.IsPinned(item.Id);
+        item.HasSticker = _stickerState.IsPinned(item.Id);
 
         if (atTop)
         {

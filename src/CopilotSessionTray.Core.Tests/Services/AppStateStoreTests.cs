@@ -232,6 +232,68 @@ public sealed class AppStateStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task GetPinnedSessionIdsAsync_ReturnsNull_WhenNeverSaved()
+    {
+        Assert.Null(await CreateStore().GetPinnedSessionIdsAsync());
+    }
+
+    [Fact]
+    public async Task GetPinnedSessionIdsAsync_ToleratesAFileWrittenBeforePinsExisted()
+    {
+        await File.WriteAllTextAsync(_stateFilePath, "{\"readMarkers\":{},\"stickers\":{\"visible\":true,\"opacity\":0.9,\"pinned\":[]}}");
+
+        Assert.Null(await CreateStore().GetPinnedSessionIdsAsync());
+    }
+
+    [Fact]
+    public async Task SavePinnedSessionIdsAsync_RoundTripsInOrder()
+    {
+        await CreateStore().SavePinnedSessionIdsAsync(["session-2", "session-1", "session-3"]);
+
+        Assert.Equal(["session-2", "session-1", "session-3"], await CreateStore().GetPinnedSessionIdsAsync());
+    }
+
+    [Fact]
+    public async Task SavePinnedSessionIdsAsync_AnEmptyList_IsSavedAsEmpty_NotAsNeverSaved()
+    {
+        await CreateStore().SavePinnedSessionIdsAsync(["session-1"]);
+        await CreateStore().SavePinnedSessionIdsAsync([]);
+
+        var saved = await CreateStore().GetPinnedSessionIdsAsync();
+
+        Assert.NotNull(saved);
+        Assert.Empty(saved);
+    }
+
+    [Fact]
+    public async Task PinsAndStickers_DoNotOverwriteEachOther()
+    {
+        IAppStateStore store = CreateStore();
+        var sticker = new PinnedSticker("session-9", new DateTimeOffset(2026, 1, 2, 3, 4, 5, TimeSpan.Zero), StickerPlacement.None);
+
+        await store.SavePinnedSessionIdsAsync(["session-1"]);
+        await store.SaveStickersAsync(new StickerSnapshot(new StickerSettings(false, 0.6), [sticker]));
+        await store.SetCustomDisplayNameAsync("session-1", "My name");
+
+        Assert.Equal(["session-1"], await store.GetPinnedSessionIdsAsync());
+        Assert.Equal([sticker], (await store.GetStickersAsync()).Pinned);
+        Assert.Equal("My name", await store.GetCustomDisplayNameAsync("session-1"));
+
+        await store.SavePinnedSessionIdsAsync(["session-2"]);
+
+        Assert.Equal([sticker], (await store.GetStickersAsync()).Pinned);
+        Assert.Equal("My name", await store.GetCustomDisplayNameAsync("session-1"));
+    }
+
+    [Fact]
+    public async Task GetPinnedSessionIdsAsync_CleansUpAHandEditedFile()
+    {
+        await File.WriteAllTextAsync(_stateFilePath, "{\"pinnedSessions\":[\"b\",null,\"  \",\"a\",\"b\",\"\"]}");
+
+        Assert.Equal(["b", "a"], await CreateStore().GetPinnedSessionIdsAsync());
+    }
+
+    [Fact]
     public async Task MutateAsync_CreatesParentDirectory_WhenMissing()
     {
         var nestedPath = Path.Combine(Path.GetTempPath(), $"appstate-tests-nested-{Guid.NewGuid():N}", "app-state.json");

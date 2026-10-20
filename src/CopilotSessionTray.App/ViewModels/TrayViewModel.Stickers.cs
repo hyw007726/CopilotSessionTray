@@ -24,25 +24,38 @@ public sealed partial class TrayViewModel
     partial void OnStickerOpacityChanged(double value) => _stickerState.SetOpacity(value);
 
     [RelayCommand]
-    private void TogglePin(SessionItemViewModel? session)
+    private void ToggleSticker(SessionItemViewModel? session)
     {
         if (session is null || !IsShowingLiveData)
         {
             return;
         }
 
-        var pin = !session.IsPinned;
-        SetPinned(session, pin);
-        if (pin && !StickersVisible)
+        if (session.HasSticker && !session.IsStickerHidden)
+        {
+            SetSticker(session, false);
+            return;
+        }
+
+        if (session.HasSticker)
+        {
+            session.IsStickerHidden = false;
+        }
+        else
+        {
+            SetSticker(session, true);
+        }
+
+        if (!StickersVisible)
         {
             StickersVisible = true;
         }
     }
 
-    private void SetPinned(SessionItemViewModel session, bool pinned)
+    private void SetSticker(SessionItemViewModel session, bool sticker)
     {
-        _stickerState.SetPinned(session.Id, pinned);
-        session.IsPinned = pinned;
+        _stickerState.SetPinned(session.Id, sticker);
+        session.HasSticker = sticker;
     }
 
     private async Task LoadStickerStateAsync()
@@ -50,32 +63,6 @@ public sealed partial class TrayViewModel
         await _stickerState.LoadAsync();
         StickersVisible = _stickerState.Visible;
         StickerOpacity = _stickerState.Opacity;
-    }
-
-    private async Task AddMissingPinnedSessionsAsync(DateTimeOffset now)
-    {
-        foreach (var pinned in _stickerState.Pinned)
-        {
-            if (Sessions.Any(session => session.Id == pinned.SessionId))
-            {
-                continue;
-            }
-
-            SessionSummary? summary = null;
-            try
-            {
-                summary = await _liveHistoryStore.GetSessionAsync(pinned.SessionId);
-            }
-            catch
-            {
-                continue;
-            }
-
-            if (summary is not null)
-            {
-                AddSessionIfNew(await BuildClosedSessionItemAsync(summary, now));
-            }
-        }
     }
 
     private static void ApplyGist(SessionItemViewModel row, SessionChangeEvent change)

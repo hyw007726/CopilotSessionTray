@@ -7,7 +7,7 @@ namespace CopilotSessionTray.Core.Services;
 
 /// <summary>
 /// Real implementation of <see cref="IAppStateStore"/> — persists this
-/// app's own state (read markers, preferences, custom display names, sticker pins) as a
+/// app's own state (read markers, preferences, custom display names, sticker pins, panel pins) as a
 /// single small JSON file under <c>%LOCALAPPDATA%\CopilotSessionTray\</c>,
 /// entirely separate from anything under <c>.copilot</c>. A
 /// <see cref="SemaphoreSlim"/> serializes read-modify-write operations
@@ -132,6 +132,20 @@ public sealed class AppStateStore : IAppStateStore
         }, cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<IReadOnlyList<string>?> GetPinnedSessionIdsAsync(CancellationToken cancellationToken = default)
+    {
+        var state = await LoadAsync(cancellationToken).ConfigureAwait(false);
+        return state.PinnedSessions is null ? null : CleanIds(state.PinnedSessions);
+    }
+
+    public async Task SavePinnedSessionIdsAsync(IReadOnlyList<string> sessionIds, CancellationToken cancellationToken = default)
+    {
+        await MutateAsync(state => state.PinnedSessions = CleanIds(sessionIds), cancellationToken).ConfigureAwait(false);
+    }
+
+    private static List<string> CleanIds(IEnumerable<string?> sessionIds) =>
+        sessionIds.Where(id => !string.IsNullOrWhiteSpace(id)).Select(id => id!).Distinct().ToList();
+
     private static double? Finite(double? value) => value is { } number && double.IsFinite(number) ? number : null;
 
     private static double? PositiveFinite(double? value) => value is { } number && double.IsFinite(number) && number > 0 ? number : null;
@@ -198,6 +212,8 @@ public sealed class AppStateStore : IAppStateStore
         public Dictionary<string, string> CustomDisplayNames { get; set; } = new();
 
         public StoredStickers? Stickers { get; set; }
+
+        public List<string>? PinnedSessions { get; set; }
     }
 
     private sealed class StoredStickers

@@ -124,7 +124,7 @@ public sealed class StickerManager : IDisposable
 
     private void OnRowChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(SessionItemViewModel.IsPinned) or nameof(SessionItemViewModel.Status))
+        if (e.PropertyName is nameof(SessionItemViewModel.HasSticker) or nameof(SessionItemViewModel.IsStickerHidden) or nameof(SessionItemViewModel.Status))
         {
             Sync();
         }
@@ -157,14 +157,18 @@ public sealed class StickerManager : IDisposable
         try
         {
             var rows = _viewModel.Sessions.ToList();
-            var pinnedRows = rows.Where(row => row.IsPinned).ToList();
+            var pinnedRows = rows.Where(row => row.HasSticker).ToList();
 
             foreach (var (id, status) in _snoozed.ToList())
             {
                 var row = pinnedRows.FirstOrDefault(candidate => candidate.Id == id);
-                if (row is null || row.Status != status)
+                if (row is null || row.Status != status || !row.IsStickerHidden)
                 {
                     _snoozed.Remove(id);
+                    if (row is not null)
+                    {
+                        row.IsStickerHidden = false;
+                    }
                 }
             }
 
@@ -234,6 +238,7 @@ public sealed class StickerManager : IDisposable
     private void Snooze(SessionItemViewModel row)
     {
         _snoozed[row.Id] = row.Status;
+        row.IsStickerHidden = true;
         Sync();
     }
 

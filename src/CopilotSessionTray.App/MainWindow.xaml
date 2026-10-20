@@ -113,7 +113,8 @@
 
         <ListBox Grid.Row="1"
                  Margin="8,0,8,8"
-                 ItemsSource="{Binding Sessions}"
+                 ItemsSource="{Binding SessionsView}"
+                 HorizontalContentAlignment="Stretch"
                  BorderThickness="0"
                  Background="Transparent">
             <ListBox.ItemTemplate>
@@ -151,7 +152,21 @@
                                    Visibility="{Binding StatusIconVisibility}" />
 
                             <StackPanel Grid.Row="0" Grid.Column="1">
-                                <TextBlock FontWeight="SemiBold" TextTrimming="CharacterEllipsis" Text="{Binding DisplayName}" />
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0"
+                                               Margin="0,0,4,0"
+                                               VerticalAlignment="Center"
+                                               FontSize="10"
+                                               Foreground="Gray"
+                                               Text="📌"
+                                               ToolTip="Pinned to the top of the list"
+                                               Visibility="{Binding PinGlyphVisibility}" />
+                                    <TextBlock Grid.Column="1" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" Text="{Binding DisplayName}" />
+                                </Grid>
                                 <TextBlock FontSize="11" Foreground="Gray" TextWrapping="Wrap" Text="{Binding Detail}" />
                                 <!-- Foreground bound to StatusBrush (2026-10-05, §9.6) so the
                                      status text itself is color-coded the same as its dot/the
@@ -171,28 +186,36 @@
                                 as CommandParameter.
                             -->
                             <StackPanel Grid.Row="1" Grid.Column="1"
-                                        Orientation="Horizontal"
                                         HorizontalAlignment="Right"
                                         Margin="0,4,0,0">
-                                <Button Padding="5,2" Margin="4,0,0,0" FontSize="10"
-                                        Content="{Binding PinButtonText}"
-                                        ToolTip="Pin this session as a sticker on your screen, or unpin it"
-                                        Command="{Binding DataContext.TogglePinCommand, ElementName=RootWindow}"
-                                        CommandParameter="{Binding}" />
-                                <Button Padding="5,2" Margin="4,0,0,0" FontSize="10"
-                                        Content="⤴ Resume"
-                                        ToolTip="Choose how to resume this session"
-                                        Click="ResumeButton_Click" />
-                                <Button Padding="5,2" Margin="4,0,0,0" FontSize="10"
-                                        Content="🗒 Summary"
-                                        ToolTip="View this session's AI-written summary, or rename it locally"
-                                        Command="{Binding DataContext.ShowSessionSummaryCommand, ElementName=RootWindow}"
-                                        CommandParameter="{Binding}" />
-                                <Button Padding="5,2" Margin="4,0,0,0" FontSize="10"
-                                        Content="✕ Remove"
-                                        ToolTip="Remove this session from the list (does not touch the real Copilot session)"
-                                        Command="{Binding DataContext.RemoveSessionCommand, ElementName=RootWindow}"
-                                        CommandParameter="{Binding}" />
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                    <Button Padding="5,2" Margin="4,0,0,0" FontSize="10"
+                                            Content="⤴ Resume"
+                                            ToolTip="Choose how to resume this session"
+                                            Click="ResumeButton_Click" />
+                                    <Button Padding="5,2" Margin="4,0,0,0" FontSize="10"
+                                            Content="🗒 Summary"
+                                            ToolTip="View this session's AI-written summary, or rename it locally"
+                                            Command="{Binding DataContext.ShowSessionSummaryCommand, ElementName=RootWindow}"
+                                            CommandParameter="{Binding}" />
+                                    <Button Padding="5,2" Margin="4,0,0,0" FontSize="10"
+                                            Content="✕ Remove"
+                                            ToolTip="Remove this session from the list (does not touch the real Copilot session)"
+                                            Command="{Binding DataContext.RemoveSessionCommand, ElementName=RootWindow}"
+                                            CommandParameter="{Binding}" />
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,4,0,0">
+                                    <Button Padding="5,2" Margin="4,0,0,0" FontSize="10"
+                                            Content="{Binding PinButtonText}"
+                                            ToolTip="Pin this session to the top of the list, or unpin it"
+                                            Command="{Binding DataContext.TogglePinCommand, ElementName=RootWindow}"
+                                            CommandParameter="{Binding}" />
+                                    <Button Padding="5,2" Margin="4,0,0,0" FontSize="10"
+                                            Content="{Binding StickerButtonText}"
+                                            ToolTip="{Binding StickerButtonToolTip}"
+                                            Command="{Binding DataContext.ToggleStickerCommand, ElementName=RootWindow}"
+                                            CommandParameter="{Binding}" />
+                                </StackPanel>
                             </StackPanel>
                         </Grid>
                     </Border>
@@ -222,7 +245,7 @@
                         Maximum="{Binding MaxStickerOpacity, Mode=OneTime}"
                         SmallChange="0.05" LargeChange="0.1"
                         Value="{Binding StickerOpacity, Mode=TwoWay}"
-                        ToolTip="How see-through pinned stickers are" />
+                        ToolTip="How see-through the stickers are" />
                 <TextBlock Width="34" Margin="4,0,0,0" VerticalAlignment="Center" FontSize="11" Foreground="Gray"
                            Text="{Binding StickerOpacity, StringFormat={}{0:P0}}" />
             </StackPanel>
