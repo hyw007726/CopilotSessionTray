@@ -5,6 +5,7 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:tb="clr-namespace:H.NotifyIcon;assembly=H.NotifyIcon.Wpf"
+        xmlns:local="clr-namespace:CopilotSessionTray.App"
         xmlns:vm="clr-namespace:CopilotSessionTray.App.ViewModels"
         mc:Ignorable="d"
         Title="Copilot Session Tray"
@@ -79,14 +80,29 @@
             </tb:TaskbarIcon.ContextMenu>
         </tb:TaskbarIcon>
 
-        <StackPanel Grid.Row="0" Margin="12,10,12,6">
-            <TextBlock FontSize="14" FontWeight="Bold" Text="Copilot Session Tray" />
-            <TextBlock Margin="0,2,0,0"
+        <Grid Grid.Row="0" Margin="12,10,12,6">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <TextBlock VerticalAlignment="Center" FontSize="14" FontWeight="Bold" Text="Copilot Session Tray" />
+            <CheckBox Grid.Column="1"
+                      VerticalAlignment="Center"
+                      FontSize="11"
+                      Content="📌 Pinned only"
+                      ToolTip="Show only the sessions you have pinned with 📌 Pin"
+                      IsChecked="{Binding ShowPinnedOnly, Mode=TwoWay}" />
+            <TextBlock Grid.Row="1" Grid.ColumnSpan="2"
+                       Margin="0,2,0,0"
                        FontSize="11"
                        Foreground="Gray"
                        TextWrapping="Wrap"
                        Text="{Binding HeaderSubtitleText}" />
-        </StackPanel>
+        </Grid>
 
         <!--
             Watermark (2026-10-02, see IMPLEMENTATION_PLAN.md §9.4/§9.5) — the same Guanyin
@@ -115,11 +131,24 @@
                  Margin="8,0,8,8"
                  ItemsSource="{Binding SessionsView}"
                  HorizontalContentAlignment="Stretch"
+                 ScrollViewer.CanContentScroll="False"
+                 local:WheelScrolling.IsProportional="True"
+                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                 ScrollViewer.VerticalScrollBarVisibility="Visible"
                  BorderThickness="0"
                  Background="Transparent">
             <ListBox.ItemTemplate>
                 <DataTemplate DataType="{x:Type vm:SessionItemViewModel}">
                     <Border BorderBrush="#DDDDDD" BorderThickness="0,0,0,1" Padding="6">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding NeedsInput}" Value="True">
+                                        <Setter Property="Background" Value="#FDECEA" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
                         <Grid>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
@@ -165,13 +194,45 @@
                                                Text="📌"
                                                ToolTip="Pinned to the top of the list"
                                                Visibility="{Binding PinGlyphVisibility}" />
-                                    <TextBlock Grid.Column="1" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" Text="{Binding DisplayName}" />
+                                    <TextBlock Grid.Column="1"
+                                               FontWeight="SemiBold"
+                                               TextTrimming="CharacterEllipsis"
+                                               Text="{Binding DisplayName}"
+                                               ToolTipService.InitialShowDelay="400">
+                                        <TextBlock.ToolTip>
+                                            <ToolTip MaxWidth="440">
+                                                <TextBlock TextWrapping="Wrap" Text="{Binding NameToolTip}" />
+                                            </ToolTip>
+                                        </TextBlock.ToolTip>
+                                    </TextBlock>
                                 </Grid>
-                                <TextBlock FontSize="11" Foreground="Gray" TextWrapping="Wrap" Text="{Binding Detail}" />
+                                <TextBlock FontSize="11"
+                                           Foreground="Gray"
+                                           TextWrapping="Wrap"
+                                           Text="{Binding Detail}"
+                                           ToolTipService.InitialShowDelay="400"
+                                           ToolTipService.IsEnabled="{Binding HasDetailToolTip}">
+                                    <TextBlock.ToolTip>
+                                        <ToolTip MaxWidth="440">
+                                            <TextBlock TextWrapping="Wrap" Text="{Binding DetailToolTip}" />
+                                        </ToolTip>
+                                    </TextBlock.ToolTip>
+                                </TextBlock>
                                 <!-- Foreground bound to StatusBrush (2026-10-05, §9.6) so the
                                      status text itself is color-coded the same as its dot/the
                                      tray icon (e.g. green for "Working"), not just the dot. -->
-                                <TextBlock FontSize="10" Foreground="{Binding StatusBrush}">
+                                <TextBlock FontSize="10" Foreground="{Binding StatusBrush}"
+                                           ToolTip="{Binding NeedsInputToolTip}"
+                                           ToolTipService.IsEnabled="{Binding NeedsInput}">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding NeedsInput}" Value="True">
+                                                    <Setter Property="FontWeight" Value="SemiBold" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
                                     <Run Text="{Binding StatusLabel, Mode=OneWay}" />
                                     <Run Text=" · " />
                                     <Run Text="{Binding ElapsedLabel, Mode=OneWay}" />

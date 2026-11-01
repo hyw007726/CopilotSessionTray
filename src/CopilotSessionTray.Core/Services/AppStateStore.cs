@@ -58,7 +58,7 @@ public sealed class AppStateStore : IAppStateStore
         var state = await LoadAsync(cancellationToken).ConfigureAwait(false);
         return state.Preferences ?? new NotificationPreferences(
             IsMuted: false, QuietHoursStart: null, QuietHoursEnd: null,
-            WatchedRepositories: Array.Empty<string>(), LastNewTaskWorkspaceDirectory: null);
+            WatchedRepositories: Array.Empty<string>(), LastNewTaskWorkspaceDirectory: null, ShowPinnedOnly: false);
     }
 
     public async Task SavePreferencesAsync(NotificationPreferences preferences, CancellationToken cancellationToken = default)
@@ -103,7 +103,8 @@ public sealed class AppStateStore : IAppStateStore
             .Select(item => new PinnedSticker(
                 item.SessionId,
                 item.PinnedAtUtc,
-                new StickerPlacement(Finite(item.Left), Finite(item.Top), PositiveFinite(item.Width), PositiveFinite(item.Height))))
+                new StickerPlacement(Finite(item.Left), Finite(item.Top), PositiveFinite(item.Width), PositiveFinite(item.Height)),
+                ParseStatus(item.HiddenAtStatus)))
             .ToList();
 
         return new StickerSnapshot(new StickerSettings(stored.Visible, StickerSettings.ClampOpacity(stored.Opacity)), pinned);
@@ -126,6 +127,7 @@ public sealed class AppStateStore : IAppStateStore
                         Top = item.Placement.Top,
                         Width = item.Placement.Width,
                         Height = item.Placement.Height,
+                        HiddenAtStatus = item.HiddenAtStatus?.ToString(),
                     })
                     .ToList(),
             };
@@ -149,6 +151,9 @@ public sealed class AppStateStore : IAppStateStore
     private static double? Finite(double? value) => value is { } number && double.IsFinite(number) ? number : null;
 
     private static double? PositiveFinite(double? value) => value is { } number && double.IsFinite(number) && number > 0 ? number : null;
+
+    private static SessionStatus? ParseStatus(string? value) =>
+        value is not null && Enum.GetNames<SessionStatus>().Contains(value) ? Enum.Parse<SessionStatus>(value) : null;
 
     private async Task<StoredState> LoadAsync(CancellationToken cancellationToken)
     {
@@ -238,6 +243,8 @@ public sealed class AppStateStore : IAppStateStore
         public double? Width { get; set; }
 
         public double? Height { get; set; }
+
+        public string? HiddenAtStatus { get; set; }
     }
 
     private sealed record StoredReadMarker(long LastAcknowledgedEventOffset, DateTimeOffset LastAcknowledgedUtc, bool IsDismissed);

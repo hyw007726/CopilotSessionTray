@@ -91,6 +91,7 @@ public sealed partial class TrayViewModel : ObservableObject
     private readonly DispatcherTimer _monitorTimer;
     private bool _isPolling;
     private bool _isSummaryDialogOpen;
+    private readonly NeedsInputAlerts _needsInputAlerts = new(DateTimeOffset.UtcNow);
 
     // Starts at 5 (not the implicit default of 0) so the FIRST real view (triggered by
     // StartMonitoring() below) is the live scenario, not fake demo data — see the class doc
@@ -133,6 +134,7 @@ public sealed partial class TrayViewModel : ObservableObject
         // replaces this with live data, below.
         Sessions = new ObservableCollection<SessionItemViewModel>();
         SessionsView = CreateSessionsView(Sessions);
+        SessionsView.CollectionChanged += (_, _) => UpdateEmptyState();
         LoadDemoScenario(0);
 
         // Read without going through the property setter so we don't
@@ -157,7 +159,7 @@ public sealed partial class TrayViewModel : ObservableObject
         }
 
         _ = LoadLiveSessionsThenPollAsync();
-        _ = LoadMutePreferenceAsync();
+        _ = LoadPreferencesAsync();
         _monitorTimer.Start();
     }
 
@@ -169,11 +171,12 @@ public sealed partial class TrayViewModel : ObservableObject
         await OnMonitorTimerTickAsync();
     }
 
-    /// <summary>Loads the persisted mute preference at startup — otherwise <see cref="IsMuted"/> would always reset to its default (false) on every launch.</summary>
-    private async Task LoadMutePreferenceAsync()
+    /// <summary>Loads the persisted preferences at startup — otherwise <see cref="IsMuted"/> and <see cref="ShowPinnedOnly"/> would always reset to their defaults (false) on every launch.</summary>
+    private async Task LoadPreferencesAsync()
     {
         var preferences = await _appStateStore.GetPreferencesAsync();
         IsMuted = preferences.IsMuted;
+        ShowPinnedOnly = preferences.ShowPinnedOnly;
     }
 
     public ObservableCollection<SessionItemViewModel> Sessions { get; }
@@ -217,6 +220,9 @@ public sealed partial class TrayViewModel : ObservableObject
     /// property regardless, since it's still a reasonable thing for other code to ask.
     /// </summary>
     public bool IsAnyWaitingForInput => Sessions.Any(s => s.Status == SessionStatus.WaitingForInput);
+
+    /// <summary>Whether at least one open session is blocked on a permission prompt or a question for the user.</summary>
+    public bool IsAnyNeedingInput => Sessions.Any(s => s.NeedsInput);
 
     /// <summary>
     /// The popup's background watermark art, color-matched to <see cref="AggregateState"/>
@@ -288,10 +294,16 @@ public sealed partial class TrayViewModel : ObservableObject
         ? "Copilot Session Tray (live)"
         : "Copilot Session Tray (demo data)";
 
-    /// <summary>Text shown in the popup when <see cref="Sessions"/> is empty — distinguishes "no fake demo rows for this scenario" from "your real registry has no open sessions right now" / a real read failure.</summary>
-    public string EmptyStateText => IsShowingLiveData
-        ? (_liveDataError ?? "No open sessions found in your real .copilot registry right now.")
-        : "No sessions (demo)";
+    /// <summary>
+    /// Text shown in the popup when its list is empty — distinguishes "no fake demo rows for this
+    /// scenario" from "your real registry has no open sessions right now" / a real read failure,
+    /// and from "there are sessions but none is pinned" while <see cref="ShowPinnedOnly"/> is on.
+    /// </summary>
+    public string EmptyStateText => ShowPinnedOnly && Sessions.Count > 0
+        ? "No pinned sessions. Untick “Pinned only” to see all sessions."
+        : IsShowingLiveData
+            ? (_liveDataError ?? "No open sessions found in your real .copilot registry right now.")
+            : "No sessions (demo)";
 
     public string ToolTipText
     {
@@ -305,8 +317,10 @@ public sealed partial class TrayViewModel : ObservableObject
             }
 
             var working = Sessions.Count(s => s.Status == SessionStatus.Working);
+            var needInput = Sessions.Count(s => s.NeedsInput);
             return $"Copilot Session Tray ({dataLabel}){Environment.NewLine}" +
-                   $"{Sessions.Count} session(s) · {working} working";
+                   $"{Sessions.Count} session(s) · {working} working" +
+                   (needInput > 0 ? $" · {needInput} need input" : string.Empty);
         }
     }
 
@@ -468,6 +482,7 @@ public sealed partial class TrayViewModel : ObservableObject
         if (row is not null && ToDisplayText(details.Title) is { } title)
         {
             session.DisplayName = await ApplyCustomDisplayNameOverrideAsync(session.Id, title);
+            ApplyFullTitle(session, details.Title);
         }
     }
 
@@ -653,18 +668,20 @@ public sealed partial class TrayViewModel : ObservableObject
     [RelayCommand]
     private async Task ShowDemoBalloons()
     {
-        var samples = new[]
+        var finished = new[]
         {
             new SessionNotification("demo-balloon-1", "acme/widget-api", "Fixed the flaky retry test by awaiting the cleanup hook; all 42 checkout tests pass.", TimeSpan.FromMinutes(12)),
             new SessionNotification("demo-balloon-2", "sample-org/inventory-service", "Added the missing test fixture reference and re-ran the suite.", TimeSpan.FromMinutes(3) + TimeSpan.FromSeconds(20)),
-            new SessionNotification("demo-balloon-3", "octocat/hello-world", "Blocked: needs your approval before pushing to the protected branch.", TimeSpan.FromHours(1) + TimeSpan.FromMinutes(5)),
         };
 
-        foreach (var sample in samples)
+        foreach (var sample in finished)
         {
             await _notificationService.NotifySessionFinishedAsync(sample);
             await Task.Delay(500);
         }
+
+        await _notificationService.NotifySessionNeedsInputAsync(
+            new SessionNotification("demo-balloon-3", "octocat/hello-world", NeedsInputBody(PendingPromptKind.Permission), null));
     }
 
     [RelayCommand]
@@ -809,12 +826,12 @@ public sealed partial class TrayViewModel : ObservableObject
         var title = ToDisplayText(details.Title);
         var computedName = title ?? details.Repository ?? details.Cwd ?? $"Session {shortId}…";
         var displayName = await ApplyCustomDisplayNameOverrideAsync(entry.SessionId, computedName);
-        var detail = details.Cwd is { Length: > 0 } cwd
+        var baseDetail = details.Cwd is { Length: > 0 } cwd
             ? $"{cwd} · opened {FormatAge(now - entry.OpenedAtUtc)} ago"
             : $"Opened {FormatAge(now - entry.OpenedAtUtc)} ago.";
-        detail = await AppendOriginAsync(detail, details.OriginSessionId);
+        var (detail, fullDetail) = await AppendOriginAsync(baseDetail, details.OriginSessionId);
 
-        return new SessionItemViewModel(
+        var item = new SessionItemViewModel(
             entry.SessionId,
             displayName,
             status,
@@ -827,7 +844,10 @@ public sealed partial class TrayViewModel : ObservableObject
             HasPlaceholderName = title is null && displayName == computedName,
             OpenedAtUtc = entry.OpenedAtUtc,
             Gist = SessionGist.FromView(details.View) ?? string.Empty,
+            DetailToolTip = fullDetail == detail ? null : fullDetail,
         };
+        ApplyFullTitle(item, details.Title);
+        return item;
     }
 
     /// <summary>
@@ -847,26 +867,32 @@ public sealed partial class TrayViewModel : ObservableObject
         var details = await _summaryProvider.GetAsync(summary.Id, summary);
         var computedName = ToDisplayText(details.Title) ?? summary.Repository ?? summary.Cwd ?? $"Session {shortId}…";
         var displayName = await ApplyCustomDisplayNameOverrideAsync(summary.Id, computedName);
-        var detail = await AppendOriginAsync(summary.Cwd ?? summary.Repository ?? "(unknown workspace)", details.OriginSessionId);
-        return new SessionItemViewModel(
+        var (detail, fullDetail) = await AppendOriginAsync(summary.Cwd ?? summary.Repository ?? "(unknown workspace)", details.OriginSessionId);
+        var item = new SessionItemViewModel(
             summary.Id, displayName, SessionStatus.Closed, detail, now - summary.UpdatedAtUtc,
             workingDirectory: summary.Cwd, realSummary: details.ResumeText, summaryView: details.View)
         {
             OpenedAtUtc = summary.CreatedAtUtc,
             Gist = SessionGist.FromView(details.View) ?? string.Empty,
+            DetailToolTip = fullDetail == detail ? null : fullDetail,
         };
+        ApplyFullTitle(item, details.Title);
+        return item;
     }
 
-    private async Task<string> AppendOriginAsync(string detail, string? originSessionId)
+    private async Task<(string Short, string Full)> AppendOriginAsync(string detail, string? originSessionId)
     {
         if (originSessionId is null)
         {
-            return detail;
+            return (detail, detail);
         }
 
-        var originTitle = ToDisplayText(await _summaryProvider.GetTitleAsync(originSessionId))
-            ?? (originSessionId.Length > 8 ? originSessionId[..8] : originSessionId);
-        return $"{detail} · ↪ resumed from \"{SessionText.ToSingleLine(originTitle, MaxOriginTitleLength)}\"";
+        var originTitle = await _summaryProvider.GetTitleAsync(originSessionId);
+        var shortTitle = ToDisplayText(originTitle) ?? (originSessionId.Length > 8 ? originSessionId[..8] : originSessionId);
+        var fullTitle = ToFullText(originTitle) ?? shortTitle;
+        return (
+            $"{detail} · ↪ resumed from \"{SessionText.ToSingleLine(shortTitle, MaxOriginTitleLength)}\"",
+            $"{detail} · ↪ resumed from \"{fullTitle}\"");
     }
 
     /// <summary>Returns the user's persisted local rename for a session, if any, otherwise <paramref name="fallbackDisplayName"/>.</summary>
@@ -877,12 +903,19 @@ public sealed partial class TrayViewModel : ObservableObject
     }
 
     private const int MaxDisplayTextLength = 200;
+    private const int MaxFullTitleLength = 1000;
     private const int MaxOriginTitleLength = 60;
     private const int MaxOutcomeLength = 240;
     private static readonly TimeSpan MinimumNotifiableWork = TimeSpan.FromSeconds(30);
 
     private static string? ToDisplayText(string? text) =>
         string.IsNullOrWhiteSpace(text) ? null : SessionText.ToSingleLine(text, MaxDisplayTextLength);
+
+    private static string? ToFullText(string? text) =>
+        string.IsNullOrWhiteSpace(text) ? null : SessionText.ToSingleLine(text, MaxFullTitleLength);
+
+    private static void ApplyFullTitle(SessionItemViewModel session, string? title) =>
+        session.SetFullTitle(ToFullText(title), ToDisplayText(title));
 
     private static string FormatAge(TimeSpan age) => age switch
     {
@@ -997,6 +1030,8 @@ public sealed partial class TrayViewModel : ObservableObject
                     await NotifyIfNotMutedAsync(change);
                 }
 
+                await AlertAboutPromptAsync(change);
+
                 if (IsShowingLiveData && await ApplyChangeToVisibleSessionsAsync(change, now))
                 {
                     mutatedVisibleList = true;
@@ -1019,9 +1054,11 @@ public sealed partial class TrayViewModel : ObservableObject
         foreach (var session in Sessions.Where(s => s.HasPlaceholderName).ToList())
         {
             string? title;
+            string? rawTitle;
             try
             {
-                title = ToDisplayText(await _summaryProvider.GetTitleAsync(session.Id));
+                rawTitle = await _summaryProvider.GetTitleAsync(session.Id);
+                title = ToDisplayText(rawTitle);
             }
             catch
             {
@@ -1036,6 +1073,7 @@ public sealed partial class TrayViewModel : ObservableObject
             if (title is not null)
             {
                 session.DisplayName = title;
+                ApplyFullTitle(session, rawTitle);
             }
 
             session.HasPlaceholderName = title is null && session.Status != SessionStatus.Closed;
@@ -1061,20 +1099,7 @@ public sealed partial class TrayViewModel : ObservableObject
             return;
         }
 
-        SessionSummary? summary = null;
-        try
-        {
-            summary = await _liveHistoryStore.GetSessionAsync(change.SessionId);
-        }
-        catch
-        {
-            // best-effort enrichment only — still notify with a generic title below rather than
-            // skip the notification entirely over a lookup failure.
-        }
-
-        var shortId = change.SessionId.Length > 8 ? change.SessionId[..8] : change.SessionId;
-        var title = ToDisplayText(await _summaryProvider.GetTitleAsync(change.SessionId, summary))
-            ?? summary?.Repository ?? summary?.Cwd ?? $"Session {shortId}…";
+        var title = await ResolveNotificationTitleAsync(change.SessionId);
         var outcome = change.Outcome is null ? string.Empty : SessionText.ToPlainSnippet(change.Outcome, MaxOutcomeLength);
         var body = outcome.Length > 0 ? outcome : "Finished a turn and is waiting for input.";
 
@@ -1087,6 +1112,72 @@ public sealed partial class TrayViewModel : ObservableObject
         {
             // a notification dispatch failure (e.g. no tray icon attached yet) must never break
             // the poll loop itself.
+        }
+    }
+
+    /// <summary>The title a notification about <paramref name="sessionId"/> carries: the session's own title, else its repository, its folder or its short id.</summary>
+    private async Task<string> ResolveNotificationTitleAsync(string sessionId)
+    {
+        SessionSummary? summary = null;
+        try
+        {
+            summary = await _liveHistoryStore.GetSessionAsync(sessionId);
+        }
+        catch
+        {
+            // best-effort enrichment only — still notify with a generic title below rather than
+            // skip the notification entirely over a lookup failure.
+        }
+
+        var shortId = sessionId.Length > 8 ? sessionId[..8] : sessionId;
+        return ToDisplayText(await _summaryProvider.GetTitleAsync(sessionId, summary))
+            ?? summary?.Repository ?? summary?.Cwd ?? $"Session {shortId}…";
+    }
+
+    /// <summary>
+    /// Tells the user when a session starts waiting for them, and takes that alert down when the
+    /// wait is over, as <see cref="NeedsInputAlerts"/> decides. Runs for every change whatever the
+    /// popup is showing, like the finished-session notifications.
+    /// </summary>
+    private async Task AlertAboutPromptAsync(SessionChangeEvent change)
+    {
+        switch (_needsInputAlerts.Observe(change))
+        {
+            case NeedsInputAction.Alert:
+                await NotifyNeedsInputIfNotMutedAsync(change);
+                break;
+
+            case NeedsInputAction.Dismiss:
+                await IgnoreFailureAsync(() => _notificationService.DismissNeedsInputAsync(change.SessionId));
+                break;
+        }
+    }
+
+    private async Task NotifyNeedsInputIfNotMutedAsync(SessionChangeEvent change)
+    {
+        var preferences = await _appStateStore.GetPreferencesAsync();
+        if (preferences.IsMuted)
+        {
+            return;
+        }
+
+        var notification = new SessionNotification(
+            change.SessionId, await ResolveNotificationTitleAsync(change.SessionId), NeedsInputBody(change.Prompt.Kind), null);
+        await IgnoreFailureAsync(() => _notificationService.NotifySessionNeedsInputAsync(notification));
+    }
+
+    private static string NeedsInputBody(PendingPromptKind kind) =>
+        kind == PendingPromptKind.Permission ? "Needs your approval" : "Needs your answer";
+
+    /// <summary>Runs a notification call and swallows any failure, so a notification problem can never break the poll loop.</summary>
+    private static async Task IgnoreFailureAsync(Func<Task> call)
+    {
+        try
+        {
+            await call();
+        }
+        catch
+        {
         }
     }
 
@@ -1106,9 +1197,10 @@ public sealed partial class TrayViewModel : ObservableObject
                 if (existing is not null)
                 {
                     ApplyGist(existing, change);
+                    var promptChanged = ApplyPrompt(existing, change);
                     if (existing.Status != SessionStatus.Closed)
                     {
-                        return false;
+                        return promptChanged;
                     }
 
                     existing.Status = change.Status;
@@ -1136,6 +1228,7 @@ public sealed partial class TrayViewModel : ObservableObject
 
                 var started = await BuildOpenSessionItemAsync(entry, now);
                 ApplyGist(started, change);
+                started.PendingPrompt = change.Prompt;
                 return AddSessionIfNew(started, atTop: true);
 
             case SessionChangeKind.WorkingStateChanged:
@@ -1145,6 +1238,7 @@ public sealed partial class TrayViewModel : ObservableObject
                 }
 
                 existing.Status = SessionStatus.Working;
+                ApplyPrompt(existing, change);
                 ApplyGist(existing, change);
                 return true;
 
@@ -1155,8 +1249,12 @@ public sealed partial class TrayViewModel : ObservableObject
                 }
 
                 existing.Status = SessionStatus.Finished;
+                ApplyPrompt(existing, change);
                 ApplyGist(existing, change);
                 return true;
+
+            case SessionChangeKind.NeedsInputChanged:
+                return existing is not null && ApplyPrompt(existing, change);
 
             case SessionChangeKind.Closed:
                 if (existing is null)
@@ -1166,6 +1264,7 @@ public sealed partial class TrayViewModel : ObservableObject
 
                 // Kept visible (not removed) with its status flipped, so the user can see "that
                 // one just closed" rather than having a row silently vanish without explanation.
+                existing.PendingPrompt = default;
                 existing.Status = SessionStatus.Closed;
                 return true;
 
@@ -1210,9 +1309,15 @@ public sealed partial class TrayViewModel : ObservableObject
         }
     }
 
+    private void UpdateEmptyState()
+    {
+        EmptyStateVisibility = SessionsView.IsEmpty ? Visibility.Visible : Visibility.Collapsed;
+        OnPropertyChanged(nameof(EmptyStateText));
+    }
+
     private void RecomputeAggregateState()
     {
-        EmptyStateVisibility = Sessions.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        UpdateEmptyState();
 
         // Priority order (highest wins) — see TrayAggregateState's own doc comment.
         // TrayAggregateState.WaitingForInput is deliberately never assigned here (2026-10-05,
@@ -1240,6 +1345,7 @@ public sealed partial class TrayViewModel : ObservableObject
         // after it.
         OnPropertyChanged(nameof(IsAnyWorking));
         OnPropertyChanged(nameof(IsAnyWaitingForInput));
+        OnPropertyChanged(nameof(IsAnyNeedingInput));
         OnPropertyChanged(nameof(WatermarkImageSource));
         OnPropertyChanged(nameof(ToolTipText));
     }

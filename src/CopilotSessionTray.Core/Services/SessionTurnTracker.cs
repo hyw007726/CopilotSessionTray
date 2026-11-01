@@ -5,12 +5,14 @@ namespace CopilotSessionTray.Core.Services;
 
 /// <summary>
 /// Follows one session's event stream across polls to remember what it last reported and when its
-/// current piece of work began, so a "finished" transition can carry both.
+/// current piece of work began, so a "finished" transition can carry both, and whether it is
+/// blocked on the user.
 /// </summary>
 internal sealed class SessionTurnTracker
 {
     private const int MaxRequestLength = 2000;
 
+    private readonly PendingPromptTracker _prompts = new();
     private string? _taskSummary;
     private string? _lastMessage;
     private string? _request;
@@ -21,6 +23,8 @@ internal sealed class SessionTurnTracker
 
     public string? Request => _request;
 
+    public PendingPrompt PendingPrompt => _prompts.Current;
+
     public TimeSpan? WorkedFor =>
         _workStartedUtc is { } start && _lastEventUtc is { } end && end >= start ? end - start : null;
 
@@ -28,6 +32,7 @@ internal sealed class SessionTurnTracker
     {
         foreach (var record in events)
         {
+            _prompts.Observe(record);
             if (record.TimestampUtc is { } timestamp)
             {
                 _lastEventUtc = timestamp;

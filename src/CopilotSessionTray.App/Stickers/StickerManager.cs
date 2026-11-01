@@ -13,7 +13,7 @@ public sealed class StickerManager : IDisposable
     private readonly StickerState _state;
     private readonly Func<Window, SessionItemViewModel, bool> _confirmResume;
     private readonly Dictionary<string, StickerWindow> _windows = new();
-    private readonly Dictionary<string, SessionStatus> _snoozed = new();
+    private readonly Dictionary<string, (SessionStatus Status, bool NeedsInput)> _snoozed = new();
     private readonly HashSet<SessionItemViewModel> _watched = new();
     private bool _started;
     private bool _syncing;
@@ -124,7 +124,7 @@ public sealed class StickerManager : IDisposable
 
     private void OnRowChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(SessionItemViewModel.HasSticker) or nameof(SessionItemViewModel.IsStickerHidden) or nameof(SessionItemViewModel.Status))
+        if (e.PropertyName is nameof(SessionItemViewModel.HasSticker) or nameof(SessionItemViewModel.IsStickerHidden) or nameof(SessionItemViewModel.Status) or nameof(SessionItemViewModel.NeedsInput))
         {
             Sync();
         }
@@ -159,12 +159,13 @@ public sealed class StickerManager : IDisposable
             var rows = _viewModel.Sessions.ToList();
             var pinnedRows = rows.Where(row => row.HasSticker).ToList();
 
-            foreach (var (id, status) in _snoozed.ToList())
+            foreach (var (id, hiddenAt) in _snoozed.ToList())
             {
                 var row = pinnedRows.FirstOrDefault(candidate => candidate.Id == id);
-                if (row is null || row.Status != status || !row.IsStickerHidden)
+                if (row is null || row.Status != hiddenAt.Status || row.NeedsInput != hiddenAt.NeedsInput || !row.IsStickerHidden)
                 {
                     _snoozed.Remove(id);
+                    _state.SetHiddenStatus(id, null);
                     if (row is not null)
                     {
                         row.IsStickerHidden = false;
@@ -233,11 +234,34 @@ public sealed class StickerManager : IDisposable
         window.ResumeRequested += (_, _) => Resume(window, row);
         window.PlacementCommitted += (_, _) => _state.SavePlacement(row.Id, new StickerPlacement(window.Left, window.Top, window.Width, window.Height));
         _windows[row.Id] = window;
+        RestoreHidden(row);
     }
+
+    private void RestoreHidden(SessionItemViewModel row)
+    {
+        if (_state.GetHiddenStatus(row.Id) is not { } saved)
+        {
+            return;
+        }
+
+        if (!row.NeedsInput && saved == Resting(row.Status))
+        {
+            _snoozed[row.Id] = (row.Status, false);
+            row.IsStickerHidden = true;
+        }
+        else
+        {
+            _state.SetHiddenStatus(row.Id, null);
+        }
+    }
+
+    private static SessionStatus Resting(SessionStatus status) =>
+        status == SessionStatus.Finished ? SessionStatus.WaitingForInput : status;
 
     private void Snooze(SessionItemViewModel row)
     {
-        _snoozed[row.Id] = row.Status;
+        _snoozed[row.Id] = (row.Status, row.NeedsInput);
+        _state.SetHiddenStatus(row.Id, Resting(row.Status));
         row.IsStickerHidden = true;
         Sync();
     }

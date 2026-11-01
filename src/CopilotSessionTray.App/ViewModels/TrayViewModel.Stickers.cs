@@ -72,4 +72,15 @@ public sealed partial class TrayViewModel
             row.Gist = gist;
         }
     }
+
+    private static bool ApplyPrompt(SessionItemViewModel row, SessionChangeEvent change)
+    {
+        if (row.PendingPrompt == change.Prompt)
+        {
+            return false;
+        }
+
+        row.PendingPrompt = change.Prompt;
+        return true;
+    }
 }

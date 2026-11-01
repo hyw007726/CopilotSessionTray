@@ -2,6 +2,7 @@ using System.Collections;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Windows.Data;
+using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using CopilotSessionTray.Core.Models;
 using CopilotSessionTray.Core.Services;
@@ -11,16 +12,63 @@ namespace CopilotSessionTray.App.ViewModels;
 public sealed partial class TrayViewModel
 {
     private readonly SessionPins _sessionPins;
+    private readonly SemaphoreSlim _showPinnedOnlySaveGate = new(1, 1);
 
-    /// <summary><see cref="Sessions"/> as the list shows it: pinned rows first, every other row in its usual order.</summary>
+    /// <summary>
+    /// <see cref="Sessions"/> as the list shows it: pinned rows first, every other row in its usual
+    /// order, and only the pinned rows while <see cref="ShowPinnedOnly"/> is on.
+    /// </summary>
     public ICollectionView SessionsView { get; }
+
+    /// <summary>
+    /// Whether the popup lists only the pinned sessions. It filters the list and nothing else: the
+    /// tray icon, its tooltip and the stickers still count every session, so one that needs you
+    /// turns the tray icon red even while its row is hidden. Saved with the other preferences.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(EmptyStateText))]
+    private bool _showPinnedOnly;
 
     private static ICollectionView CreateSessionsView(ObservableCollection<SessionItemViewModel> sessions)
     {
         var view = new ListCollectionView(sessions) { CustomSort = new PinnedFirstComparer(sessions) };
         view.IsLiveSorting = true;
         view.LiveSortingProperties.Add(nameof(SessionItemViewModel.IsPinned));
+        view.IsLiveFiltering = true;
+        view.LiveFilteringProperties.Add(nameof(SessionItemViewModel.IsPinned));
         return view;
+    }
+
+    partial void OnShowPinnedOnlyChanged(bool value)
+    {
+        SessionsView.Filter = value ? IsPinnedRow : null;
+        _ = SaveShowPinnedOnlyAsync();
+    }
+
+    private static bool IsPinnedRow(object row) => ((SessionItemViewModel)row).IsPinned;
+
+    /// <summary>
+    /// Saves <see cref="ShowPinnedOnly"/> with the other preferences. Saves run one at a time and
+    /// each writes the value as it is by then, so a quick run of changes always ends with the last
+    /// one saved; nothing is written when the file already says the same, which is the case
+    /// when the value was only just read from it at start-up.
+    /// </summary>
+    private async Task SaveShowPinnedOnlyAsync()
+    {
+        await _showPinnedOnlySaveGate.WaitAsync();
+        try
+        {
+            var showPinnedOnly = ShowPinnedOnly;
+            var preferences = await _appStateStore.GetPreferencesAsync();
+            if (preferences.ShowPinnedOnly != showPinnedOnly)
+            {
+                await _appStateStore.SavePreferencesAsync(preferences with { ShowPinnedOnly = showPinnedOnly });
+            }
+        }
+        finally
+        {
+            _showPinnedOnlySaveGate.Release();
+        }
     }
 
     [RelayCommand]

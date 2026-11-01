@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:CopilotSessionTray.App"
         xmlns:vm="clr-namespace:CopilotSessionTray.App.ViewModels"
         mc:Ignorable="d"
         Title="Copilot session history"
@@ -23,14 +24,38 @@
 
         <ListBox x:Name="HistoryListBox"
                  Grid.Row="1"
+                 ScrollViewer.CanContentScroll="False"
+                 local:WheelScrolling.IsProportional="True"
+                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                 ScrollViewer.VerticalScrollBarVisibility="Visible"
                  BorderThickness="0"
                  Background="Transparent">
             <ListBox.ItemTemplate>
                 <DataTemplate DataType="{x:Type vm:SessionItemViewModel}">
                     <Border BorderBrush="#DDDDDD" BorderThickness="0,0,0,1" Padding="6">
                         <StackPanel>
-                            <TextBlock FontWeight="SemiBold" TextTrimming="CharacterEllipsis" Text="{Binding DisplayName}" />
-                            <TextBlock FontSize="11" Foreground="Gray" TextWrapping="Wrap" Text="{Binding Detail}" />
+                            <TextBlock FontWeight="SemiBold"
+                                       TextTrimming="CharacterEllipsis"
+                                       Text="{Binding DisplayName}"
+                                       ToolTipService.InitialShowDelay="400">
+                                <TextBlock.ToolTip>
+                                    <ToolTip MaxWidth="440">
+                                        <TextBlock TextWrapping="Wrap" Text="{Binding NameToolTip}" />
+                                    </ToolTip>
+                                </TextBlock.ToolTip>
+                            </TextBlock>
+                            <TextBlock FontSize="11"
+                                       Foreground="Gray"
+                                       TextWrapping="Wrap"
+                                       Text="{Binding Detail}"
+                                       ToolTipService.InitialShowDelay="400"
+                                       ToolTipService.IsEnabled="{Binding HasDetailToolTip}">
+                                <TextBlock.ToolTip>
+                                    <ToolTip MaxWidth="440">
+                                        <TextBlock TextWrapping="Wrap" Text="{Binding DetailToolTip}" />
+                                    </ToolTip>
+                                </TextBlock.ToolTip>
+                            </TextBlock>
                             <TextBlock FontSize="10" Foreground="#999999" Margin="0,2,0,4">
                                 <Run Text="Last updated " /><Run Text="{Binding ElapsedLabel, Mode=OneWay}" /><Run Text=" ago" />
                             </TextBlock>

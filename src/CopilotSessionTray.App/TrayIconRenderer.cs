@@ -18,6 +18,8 @@ internal sealed class TrayIconRenderer
     private const double GlowSigmaMax = 0.24;
 
     private static readonly Color GlowColor = Color.FromArgb(0xFF, 0xF2, 0xC0);
+    private static readonly Color AttentionColor = Color.FromArgb(0xE5, 0x39, 0x35);
+    private static readonly Color AttentionGlowColor = Color.FromArgb(0xFF, 0xC9, 0xC4);
 
     private readonly float[] _master;
     private readonly Color _glyphColor;
@@ -84,14 +86,16 @@ internal sealed class TrayIconRenderer
         _lightV = ((side - visibleHeight) / 2.0 + PalmsCenterY * visibleHeight) / side;
     }
 
-    /// <summary>Renders the glyph at <paramref name="sizePx"/> square; <paramref name="glow"/> (0..1) lights up the folded palms at its centre, fading outward to the plain gold.</summary>
-    public Bitmap Render(int sizePx, double glow)
+    /// <summary>Renders the glyph at <paramref name="sizePx"/> square; <paramref name="glow"/> (0..1) lights up the folded palms at its centre, fading outward to the plain gold, or to the plain red when <paramref name="attention"/> draws the glyph red for a session waiting on the user.</summary>
+    public Bitmap Render(int sizePx, double glow, bool attention = false)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(sizePx);
 
         var planes = GetPlanes(sizePx);
         var level = Math.Clamp(glow, 0, 1);
         var sigma = GlowSigmaMin + (GlowSigmaMax - GlowSigmaMin) * level;
+        var baseColor = attention ? AttentionColor : _glyphColor;
+        var glowColor = attention ? AttentionGlowColor : GlowColor;
 
         var bitmap = new Bitmap(sizePx, sizePx, PixelFormat.Format32bppArgb);
         var data = bitmap.LockBits(new Rectangle(0, 0, sizePx, sizePx), ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
@@ -107,9 +111,9 @@ internal sealed class TrayIconRenderer
                     var i = y * stride + x * 4;
                     var reach = planes.LightDistance[p] / sigma;
                     var weight = level * Math.Exp(-reach * reach);
-                    bytes[i] = Blend(_glyphColor.B, GlowColor.B, weight);
-                    bytes[i + 1] = Blend(_glyphColor.G, GlowColor.G, weight);
-                    bytes[i + 2] = Blend(_glyphColor.R, GlowColor.R, weight);
+                    bytes[i] = Blend(baseColor.B, glowColor.B, weight);
+                    bytes[i + 1] = Blend(baseColor.G, glowColor.G, weight);
+                    bytes[i + 2] = Blend(baseColor.R, glowColor.R, weight);
                     bytes[i + 3] = (byte)Math.Round(Math.Clamp(planes.Coverage[p], 0f, 1f) * 255);
                 }
             }

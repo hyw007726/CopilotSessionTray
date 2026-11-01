@@ -18,6 +18,7 @@
     <Window.Resources>
         <SolidColorBrush x:Key="WorkingBrush" Color="#B6E3B0" />
         <SolidColorBrush x:Key="IdleBrush" Color="#FFF6B0" />
+        <SolidColorBrush x:Key="AttentionBrush" Color="#F28B82" />
         <SolidColorBrush x:Key="InkBrush" Color="#1F2933" />
         <SolidColorBrush x:Key="SubInkBrush" Color="#485664" />
         <SolidColorBrush x:Key="EdgeBrush" Color="#4D000000" />
@@ -73,13 +74,36 @@
             BorderThickness="1"
             BorderBrush="{StaticResource EdgeBrush}"
             Padding="10,7,8,6"
+            ToolTipService.InitialShowDelay="400"
             MouseLeftButtonDown="Card_MouseLeftButtonDown">
+        <Border.ToolTip>
+            <ToolTip MaxWidth="440">
+                <StackPanel>
+                    <TextBlock FontWeight="SemiBold" TextWrapping="Wrap" Text="{Binding NameToolTip}" />
+                    <TextBlock Margin="0,6,0,0" TextWrapping="Wrap" Text="{Binding Gist}">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Style.Triggers>
+                                    <Trigger Property="Text" Value="">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                    <TextBlock Margin="0,6,0,0" FontSize="11" Foreground="Gray" Text="{Binding TimeLine}" />
+                </StackPanel>
+            </ToolTip>
+        </Border.ToolTip>
         <Border.Style>
             <Style TargetType="Border">
                 <Setter Property="Background" Value="{StaticResource IdleBrush}" />
                 <Style.Triggers>
                     <DataTrigger Binding="{Binding IsWorking}" Value="True">
                         <Setter Property="Background" Value="{StaticResource WorkingBrush}" />
+                    </DataTrigger>
+                    <DataTrigger Binding="{Binding NeedsInput}" Value="True">
+                        <Setter Property="Background" Value="{StaticResource AttentionBrush}" />
                     </DataTrigger>
                 </Style.Triggers>
             </Style>
@@ -120,8 +144,7 @@
                        Foreground="{StaticResource InkBrush}"
                        Text="{Binding Gist}"
                        TextTrimming="CharacterEllipsis"
-                       TextWrapping="Wrap"
-                       ToolTip="{Binding Gist}" />
+                       TextWrapping="Wrap" />
 
             <TextBlock x:Name="TimeText"
                        Grid.Row="2"

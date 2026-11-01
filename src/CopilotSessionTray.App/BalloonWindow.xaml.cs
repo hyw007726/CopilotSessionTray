@@ -28,11 +28,12 @@ public partial class BalloonWindow : Window
     private readonly Action<BalloonWindow> _clicked;
     private int _topAnimationId;
 
-    public BalloonWindow(SessionNotification notification, Color color, Action<BalloonWindow> clicked)
+    public BalloonWindow(SessionNotification notification, Color color, Action<BalloonWindow> clicked, bool isAlert = false)
     {
         InitializeComponent();
         _clicked = clicked;
         SessionId = notification.SessionId;
+        IsAlert = isAlert;
         BalloonColor = color;
         ApplyColor(color);
         Update(notification);
@@ -43,6 +44,9 @@ public partial class BalloonWindow : Window
     }
 
     public string SessionId { get; }
+
+    /// <summary>Whether this balloon says its session needs the user, rather than reporting a finished turn.</summary>
+    public bool IsAlert { get; }
 
     public Color BalloonColor { get; }
 

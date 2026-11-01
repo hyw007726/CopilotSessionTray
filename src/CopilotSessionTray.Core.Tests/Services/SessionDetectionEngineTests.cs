@@ -564,6 +564,166 @@ public sealed class SessionDetectionEngineTests : IDisposable
         Assert.Null(finished.Request);
     }
 
+    private static SessionEventRecord PermissionRequested(string id, DateTimeOffset at) =>
+        Event("permission.requested", $"{{\"requestId\":\"{id}\"}}", at);
+
+    private static SessionEventRecord PermissionCompleted(string id, DateTimeOffset at) =>
+        Event("permission.completed", $"{{\"requestId\":\"{id}\"}}", at);
+
+    private void QueueBatches(string sessionId, params IReadOnlyList<SessionEventRecord>[] batches) =>
+        _eventStreamReader.BatchesBySession[sessionId] = new Queue<IReadOnlyList<SessionEventRecord>>(batches);
+
+    [Fact]
+    public async Task Started_CarriesAPrompt_ThatIsAlreadyPendingInTheSessionsHistory()
+    {
+        AddGenuinelyOpenSession("session-1", pid: 100, working: true);
+        QueueBatches("session-1", [UserMessage(T0), PermissionRequested("req-1", T0.AddSeconds(20))]);
+
+        var started = Assert.Single(await CreateEngine().PollAsync());
+
+        Assert.Equal(SessionChangeKind.Started, started.Kind);
+        Assert.Equal(SessionStatus.Working, started.Status);
+        Assert.Equal(new PendingPrompt(PendingPromptKind.Permission, T0.AddSeconds(20)), started.Prompt);
+    }
+
+    [Fact]
+    public async Task Started_CarriesNoPrompt_WhenTheHistorysRequestWasAnswered()
+    {
+        AddGenuinelyOpenSession("session-1", pid: 100, working: true);
+        QueueBatches("session-1", [UserMessage(T0), PermissionRequested("req-1", T0.AddSeconds(20)), PermissionCompleted("req-1", T0.AddSeconds(25))]);
+
+        var started = Assert.Single(await CreateEngine().PollAsync());
+
+        Assert.False(started.Prompt.IsPending);
+    }
+
+    [Fact]
+    public async Task NeedsInputChanged_IsEmittedWhenARequestIsLoggedAndAgainWhenItIsAnswered_WithoutChangingTheStatus()
+    {
+        AddGenuinelyOpenSession("session-1", pid: 100, working: true);
+        QueueBatches("session-1", [UserMessage(T0)], [], [PermissionRequested("req-1", T0.AddSeconds(30))], [], [PermissionCompleted("req-1", T0.AddSeconds(90))]);
+        var engine = CreateEngine();
+        await engine.PollAsync();
+        Assert.Empty(await engine.PollAsync());
+
+        var asked = Assert.Single(await engine.PollAsync());
+        Assert.Equal(SessionChangeKind.NeedsInputChanged, asked.Kind);
+        Assert.Equal(SessionStatus.Working, asked.Status);
+        Assert.Equal(new PendingPrompt(PendingPromptKind.Permission, T0.AddSeconds(30)), asked.Prompt);
+
+        Assert.Empty(await engine.PollAsync());
+
+        var answered = Assert.Single(await engine.PollAsync());
+        Assert.Equal(SessionChangeKind.NeedsInputChanged, answered.Kind);
+        Assert.Equal(SessionStatus.Working, answered.Status);
+        Assert.False(answered.Prompt.IsPending);
+    }
+
+    [Fact]
+    public async Task NeedsInputChanged_KeepsTheRegistrysIdleStatus_ForAnIdleSession()
+    {
+        AddGenuinelyOpenSession("session-1", pid: 100, working: false);
+        QueueBatches("session-1", [], [Event("tool.execution_start", "{\"toolCallId\":\"call-1\",\"toolName\":\"ask_user\"}", T0)]);
+        var engine = CreateEngine();
+        await engine.PollAsync();
+
+        var asked = Assert.Single(await engine.PollAsync());
+
+        Assert.Equal(SessionChangeKind.NeedsInputChanged, asked.Kind);
+        Assert.Equal(SessionStatus.WaitingForInput, asked.Status);
+        Assert.Equal(PendingPromptKind.Question, asked.Prompt.Kind);
+    }
+
+    [Fact]
+    public async Task NeedsInputChanged_IsEmitted_WhenAnAbortCancelsThePrompt()
+    {
+        AddGenuinelyOpenSession("session-1", pid: 100, working: true);
+        QueueBatches("session-1", [PermissionRequested("req-1", T0)], [Event("abort", "{\"reason\":\"user_abort\"}", T0.AddSeconds(10))]);
+        var engine = CreateEngine();
+        await engine.PollAsync();
+
+        var cancelled = Assert.Single(await engine.PollAsync());
+
+        Assert.Equal(SessionChangeKind.NeedsInputChanged, cancelled.Kind);
+        Assert.False(cancelled.Prompt.IsPending);
+    }
+
+    [Fact]
+    public async Task NeedsInputChanged_IsEmitted_WhenTheOldestOfTwoRequestsIsAnswered_WithTheLaterTime()
+    {
+        AddGenuinelyOpenSession("session-1", pid: 100, working: true);
+        QueueBatches("session-1", [PermissionRequested("req-1", T0), PermissionRequested("req-2", T0.AddSeconds(30))], [PermissionCompleted("req-1", T0.AddSeconds(40))]);
+        var engine = CreateEngine();
+        await engine.PollAsync();
+
+        var change = Assert.Single(await engine.PollAsync());
+
+        Assert.Equal(SessionChangeKind.NeedsInputChanged, change.Kind);
+        Assert.Equal(new PendingPrompt(PendingPromptKind.Permission, T0.AddSeconds(30)), change.Prompt);
+    }
+
+    [Fact]
+    public async Task AFlagFlip_InThePollThatLogsARequest_IsReportedOnceAndCarriesThePrompt()
+    {
+        AddGenuinelyOpenSession("session-1", pid: 100, working: true);
+        QueueBatches("session-1", [UserMessage(T0)], [PermissionRequested("req-1", T0.AddSeconds(30))]);
+        var engine = CreateEngine();
+        await engine.PollAsync();
+        _registryReader.Entries["session-1"] = _registryReader.Entries["session-1"] with { Working = false };
+
+        var finished = Assert.Single(await engine.PollAsync());
+
+        Assert.Equal(SessionChangeKind.Finished, finished.Kind);
+        Assert.Equal(PendingPromptKind.Permission, finished.Prompt.Kind);
+    }
+
+    [Fact]
+    public async Task WorkingStateChanged_CarriesThePendingPrompt()
+    {
+        AddGenuinelyOpenSession("session-1", pid: 100, working: false);
+        QueueBatches("session-1", [], [UserMessage(T0), PermissionRequested("req-1", T0.AddSeconds(5))]);
+        var engine = CreateEngine();
+        await engine.PollAsync();
+        _registryReader.Entries["session-1"] = _registryReader.Entries["session-1"] with { Working = true };
+
+        var working = Assert.Single(await engine.PollAsync());
+
+        Assert.Equal(SessionChangeKind.WorkingStateChanged, working.Kind);
+        Assert.Equal(PendingPromptKind.Permission, working.Prompt.Kind);
+    }
+
+    [Fact]
+    public async Task Closed_CarriesNoPrompt_AndAReopenedSessionDoesNotInheritTheOldOne()
+    {
+        AddGenuinelyOpenSession("session-1", pid: 100, working: true);
+        QueueBatches("session-1", [PermissionRequested("req-1", T0)]);
+        var engine = CreateEngine();
+        Assert.True(Assert.Single(await engine.PollAsync()).Prompt.IsPending);
+
+        _processLivenessChecker.RunningPids.Remove(100);
+        var closed = Assert.Single(await engine.PollAsync());
+        Assert.Equal(SessionChangeKind.Closed, closed.Kind);
+        Assert.False(closed.Prompt.IsPending);
+
+        _processLivenessChecker.RunningPids.Add(100);
+        var reopened = Assert.Single(await engine.PollAsync());
+        Assert.Equal(SessionChangeKind.Started, reopened.Kind);
+        Assert.False(reopened.Prompt.IsPending);
+    }
+
+    [Fact]
+    public async Task APendingPrompt_SurvivesPollsThatBringNoNewEvents_AndEventReadFailures()
+    {
+        AddGenuinelyOpenSession("session-1", pid: 100, working: true);
+        QueueBatches("session-1", [PermissionRequested("req-1", T0)]);
+        var engine = CreateEngine();
+        await engine.PollAsync();
+
+        Assert.Empty(await engine.PollAsync());
+        _eventStreamReader.ThrowForSessions.Add("session-1");
+        Assert.Empty(await engine.PollAsync());
+    }
+
     private sealed class FakeRegistryReader : IOpenSessionsRegistryReader
     {
         public Dictionary<string, OpenSessionEntry> Entries { get; } = new();

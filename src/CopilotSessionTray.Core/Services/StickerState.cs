@@ -93,6 +93,29 @@ public sealed class StickerState : IDisposable
         }
     }
 
+    public SessionStatus? GetHiddenStatus(string sessionId)
+    {
+        lock (_gate)
+        {
+            return _pinned.FirstOrDefault(item => item.SessionId == sessionId)?.HiddenAtStatus;
+        }
+    }
+
+    public void SetHiddenStatus(string sessionId, SessionStatus? status)
+    {
+        Update(() =>
+        {
+            var index = _pinned.FindIndex(item => item.SessionId == sessionId);
+            if (index < 0 || _pinned[index].HiddenAtStatus == status)
+            {
+                return false;
+            }
+
+            _pinned[index] = _pinned[index] with { HiddenAtStatus = status };
+            return true;
+        });
+    }
+
     public void SetVisible(bool visible)
     {
         Update(() =>

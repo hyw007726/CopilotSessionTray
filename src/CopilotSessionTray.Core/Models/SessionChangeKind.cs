@@ -17,4 +17,7 @@ public enum SessionChangeKind
 
     /// <summary>The session's owning process is no longer alive, or a <c>session.shutdown</c> event was observed.</summary>
     Closed,
+
+    /// <summary>The session started or stopped waiting on the user (a permission prompt or a question) with nothing else about it changing.</summary>
+    NeedsInputChanged,
 }

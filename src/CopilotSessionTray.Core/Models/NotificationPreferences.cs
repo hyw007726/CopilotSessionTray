@@ -18,9 +18,15 @@ namespace CopilotSessionTray.Core.Models;
 /// <see cref="Contracts.IAppStateStore"/> method for a single small value —
 /// that would grow the Phase 0.5-reviewed interface surface unilaterally.
 /// </param>
+/// <param name="ShowPinnedOnly">
+/// Whether the popup lists only the pinned sessions. Another panel setting kept in this bag, for the
+/// same reason as <paramref name="LastNewTaskWorkspaceDirectory"/>; a state file saved before it
+/// existed has no value for it and reads as <c>false</c>.
+/// </param>
 public sealed record NotificationPreferences(
     bool IsMuted,
     TimeOnly? QuietHoursStart,
     TimeOnly? QuietHoursEnd,
     IReadOnlyList<string> WatchedRepositories,
-    string? LastNewTaskWorkspaceDirectory = null);
+    string? LastNewTaskWorkspaceDirectory = null,
+    bool ShowPinnedOnly = false);

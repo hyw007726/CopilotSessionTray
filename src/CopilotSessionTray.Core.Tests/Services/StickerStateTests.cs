@@ -222,6 +222,80 @@ public sealed class StickerStateTests : IDisposable
         Assert.Equal(new StickerPlacement(null, 5, null, 100), state.GetPlacement("a"));
     }
 
+    [Fact]
+    public void SetHiddenStatus_IsRemembered_ForStickersOnly()
+    {
+        using var state = Create();
+
+        state.SetHiddenStatus("a", SessionStatus.Closed);
+        Assert.Null(state.GetHiddenStatus("a"));
+
+        state.SetPinned("a", true);
+        state.SetHiddenStatus("a", SessionStatus.Closed);
+        Assert.Equal(SessionStatus.Closed, state.GetHiddenStatus("a"));
+
+        state.SetHiddenStatus("a", null);
+        Assert.Null(state.GetHiddenStatus("a"));
+    }
+
+    [Fact]
+    public void RemovingAStickerForgetsHowItWasHidden()
+    {
+        using var state = Create();
+        state.SetPinned("a", true);
+        state.SetHiddenStatus("a", SessionStatus.Working);
+
+        state.SetPinned("a", false);
+        state.SetPinned("a", true);
+
+        Assert.Null(state.GetHiddenStatus("a"));
+    }
+
+    [Fact]
+    public void SavePlacement_KeepsTheHiddenStatus()
+    {
+        using var state = Create();
+        state.SetPinned("a", true);
+        state.SetHiddenStatus("a", SessionStatus.WaitingForInput);
+
+        state.SavePlacement("a", new StickerPlacement(1, 2, 300, 150));
+
+        Assert.Equal(SessionStatus.WaitingForInput, state.GetHiddenStatus("a"));
+    }
+
+    [Fact]
+    public async Task SetHiddenStatus_WritesNothing_WhenNothingChanges()
+    {
+        using var state = Create();
+        state.SetPinned("a", true);
+        await state.FlushAsync();
+        _store.Saves.Clear();
+
+        state.SetHiddenStatus("a", null);
+        state.SetHiddenStatus("missing", SessionStatus.Closed);
+        await state.FlushAsync();
+
+        Assert.Empty(_store.Saves);
+    }
+
+    [Fact]
+    public async Task TheHiddenStatus_SurvivesARestart_ThroughTheRealStore()
+    {
+        var store = new AppStateStore(_stateFilePath);
+        using (var first = new StickerState(store, QuietPeriod, _time))
+        {
+            first.SetPinned("a", true);
+            first.SetPinned("b", true);
+            first.SetHiddenStatus("a", SessionStatus.Closed);
+        }
+
+        using var second = new StickerState(new AppStateStore(_stateFilePath), QuietPeriod, _time);
+        await second.LoadAsync();
+
+        Assert.Equal(SessionStatus.Closed, second.GetHiddenStatus("a"));
+        Assert.Null(second.GetHiddenStatus("b"));
+    }
+
     [Theory]
     [InlineData(0.05, StickerSettings.MinOpacity)]
     [InlineData(7, StickerSettings.MaxOpacity)]

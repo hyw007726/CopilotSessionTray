@@ -22,6 +22,11 @@ namespace CopilotSessionTray.Core.Models;
 /// The text of the user's latest message (cut to 2,000 characters), if one was seen — what the
 /// session is, or was last, working on. Carried by started, working and finished transitions.
 /// </param>
+/// <param name="Prompt">
+/// Whether the session is blocked on a permission prompt or a question for the user, and since
+/// when. Carried by every transition of a session that is still open; it never changes
+/// <paramref name="Status"/>, which stays what the registry and process checks say.
+/// </param>
 public sealed record SessionChangeEvent(
     string SessionId,
     SessionChangeKind Kind,
@@ -30,4 +35,5 @@ public sealed record SessionChangeEvent(
     SessionEventRecord? LatestEvent,
     string? Outcome = null,
     TimeSpan? WorkedFor = null,
-    string? Request = null);
+    string? Request = null,
+    PendingPrompt Prompt = default);

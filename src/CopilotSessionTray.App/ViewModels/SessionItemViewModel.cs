@@ -83,7 +83,25 @@ public sealed partial class SessionItemViewModel : ObservableObject
     /// touches, per Core's read-only-against-<c>.copilot</c> rule).
     /// </summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(NameToolTip))]
     private string _displayName;
+
+    private string? _fullTitle;
+
+    private string? _fullTitleShownAs;
+
+    public string NameToolTip => _fullTitle is { Length: > 0 } full && _fullTitleShownAs == DisplayName ? full : DisplayName;
+
+    internal void SetFullTitle(string? fullTitle, string? shownAs)
+    {
+        _fullTitle = fullTitle;
+        _fullTitleShownAs = shownAs;
+        OnPropertyChanged(nameof(NameToolTip));
+    }
+
+    public string? DetailToolTip { get; init; }
+
+    public bool HasDetailToolTip => DetailToolTip is not null;
 
     /// <summary>
     /// The session's current status — mutable (not just constructor-set) since 2026-09-29: the
@@ -97,10 +115,35 @@ public sealed partial class SessionItemViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(StatusDotVisibility))]
     [NotifyPropertyChangedFor(nameof(StatusIconVisibility))]
     [NotifyPropertyChangedFor(nameof(IsWorking))]
+    [NotifyPropertyChangedFor(nameof(NeedsInput))]
+    [NotifyPropertyChangedFor(nameof(NeedsInputToolTip))]
     [NotifyPropertyChangedFor(nameof(TimeLine))]
     private SessionStatus _status;
 
     public bool IsWorking => Status == SessionStatus.Working;
+
+    /// <summary>
+    /// Whether the session is blocked on a permission prompt or a question for the user, and since
+    /// when — read from its event log, independent of <see cref="Status"/>.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(NeedsInput))]
+    [NotifyPropertyChangedFor(nameof(NeedsInputToolTip))]
+    [NotifyPropertyChangedFor(nameof(StatusLabel))]
+    [NotifyPropertyChangedFor(nameof(StatusBrush))]
+    [NotifyPropertyChangedFor(nameof(StatusDotVisibility))]
+    [NotifyPropertyChangedFor(nameof(StatusIconVisibility))]
+    [NotifyPropertyChangedFor(nameof(TimeLine))]
+    private PendingPrompt _pendingPrompt;
+
+    /// <summary>The session is open and waiting on the user, so every surface shows it in red.</summary>
+    public bool NeedsInput => PendingPrompt.IsPending && Status != SessionStatus.Closed;
+
+    public string? NeedsInputToolTip => !NeedsInput
+        ? null
+        : PendingPrompt.Kind == PendingPromptKind.Question
+            ? "Waiting for your answer"
+            : "Waiting for you to approve or deny a request";
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(StickerButtonText))]
@@ -166,21 +209,32 @@ public sealed partial class SessionItemViewModel : ObservableObject
 
     private DateTimeOffset _stateSinceUtc;
 
-    /// <summary>Recomputes <see cref="Elapsed"/> as the time since the current state began.</summary>
+    private DateTimeOffset _promptSinceUtc;
+
+    /// <summary>Recomputes <see cref="Elapsed"/> as the time since the current state began, or since the pending prompt was raised.</summary>
     internal void RefreshElapsed(DateTimeOffset now)
     {
-        Elapsed = now > _stateSinceUtc ? now - _stateSinceUtc : TimeSpan.Zero;
+        var since = NeedsInput ? _promptSinceUtc : _stateSinceUtc;
+        Elapsed = now > since ? now - since : TimeSpan.Zero;
         OnPropertyChanged(nameof(OpenedLabel));
         OnPropertyChanged(nameof(TimeLine));
     }
 
     partial void OnStatusChanged(SessionStatus value)
     {
-        _stateSinceUtc = DateTimeOffset.UtcNow;
-        Elapsed = TimeSpan.Zero;
+        var now = DateTimeOffset.UtcNow;
+        _stateSinceUtc = now;
+        RefreshElapsed(now);
     }
 
-    public string StatusLabel => StatusLabelFor(Status);
+    partial void OnPendingPromptChanged(PendingPrompt value)
+    {
+        var now = DateTimeOffset.UtcNow;
+        _promptSinceUtc = value.SinceUtc ?? now;
+        RefreshElapsed(now);
+    }
+
+    public string StatusLabel => NeedsInput ? "Needs input" : StatusLabelFor(Status);
 
     /// <summary>
     /// Human-readable label for <see cref="Status"/>. <see cref="SessionStatus.WaitingForInput"/>
@@ -230,7 +284,7 @@ public sealed partial class SessionItemViewModel : ObservableObject
     /// features", since the dismissable balloon notification already serves that acknowledgment
     /// purpose). <see cref="SessionStatus.Finished"/> is now unconditionally gray, same as Idle.
     /// </remarks>
-    public Brush StatusBrush => Status switch
+    public Brush StatusBrush => NeedsInput ? AttentionBrush : Status switch
     {
         SessionStatus.Working => Brushes.MediumSeaGreen,
         SessionStatus.Finished => Brushes.Gray,
@@ -238,6 +292,15 @@ public sealed partial class SessionItemViewModel : ObservableObject
         SessionStatus.Closed => Brushes.Gray,
         _ => Brushes.Gray,
     };
+
+    private static readonly Brush AttentionBrush = CreateAttentionBrush();
+
+    private static Brush CreateAttentionBrush()
+    {
+        var brush = new SolidColorBrush(Color.FromRgb(0xD3, 0x2F, 0x2F));
+        brush.Freeze();
+        return brush;
+    }
 
     /// <summary>
     /// Plain colored dot used for every status except the "idle-like, not actively alerting"
@@ -247,13 +310,14 @@ public sealed partial class SessionItemViewModel : ObservableObject
     /// in a golden color" in place of the gray dot for Idle rows; extended the same day to
     /// Finished rows too — see <see cref="IsIdleLike"/>'s own doc comment for why). Collapsed,
     /// not just zero-size, so it never captures layout space or hit-testing it isn't needed for.
+    /// A row that <see cref="NeedsInput"/> always gets the (red) dot.
     /// </summary>
     public System.Windows.Visibility StatusDotVisibility =>
-        IsIdleLike ? System.Windows.Visibility.Collapsed : System.Windows.Visibility.Visible;
+        IsIdleLike && !NeedsInput ? System.Windows.Visibility.Collapsed : System.Windows.Visibility.Visible;
 
-    /// <summary>See <see cref="StatusDotVisibility"/> — the inverse, shown only for idle-like rows.</summary>
+    /// <summary>See <see cref="StatusDotVisibility"/> — the inverse, shown only for idle-like rows that do not need input.</summary>
     public System.Windows.Visibility StatusIconVisibility =>
-        IsIdleLike ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
+        IsIdleLike && !NeedsInput ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
 
     /// <summary>
     /// True for rows that are idle in substance even if <see cref="Status"/> itself still says

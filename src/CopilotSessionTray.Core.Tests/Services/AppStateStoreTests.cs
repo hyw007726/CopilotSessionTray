@@ -85,6 +85,7 @@ public sealed class AppStateStoreTests : IDisposable
         Assert.Null(preferences.QuietHoursStart);
         Assert.Empty(preferences.WatchedRepositories);
         Assert.Null(preferences.LastNewTaskWorkspaceDirectory);
+        Assert.False(preferences.ShowPinnedOnly);
     }
 
     [Fact]
@@ -105,6 +106,71 @@ public sealed class AppStateStoreTests : IDisposable
         Assert.Equal(new TimeOnly(22, 0), loaded.QuietHoursStart);
         Assert.Equal(@"C:\Repos\example", loaded.LastNewTaskWorkspaceDirectory);
         Assert.Equal(["octocat/hello-world"], loaded.WatchedRepositories);
+    }
+
+    [Fact]
+    public async Task SavePreferencesAsync_RoundTrips_ShowPinnedOnly_BothWays()
+    {
+        IAppStateStore store = CreateStore();
+        var preferences = new NotificationPreferences(false, null, null, Array.Empty<string>());
+
+        await store.SavePreferencesAsync(preferences with { ShowPinnedOnly = true });
+        Assert.True((await store.GetPreferencesAsync()).ShowPinnedOnly);
+
+        await store.SavePreferencesAsync(preferences with { ShowPinnedOnly = false });
+        Assert.False((await store.GetPreferencesAsync()).ShowPinnedOnly);
+    }
+
+    [Fact]
+    public async Task GetPreferencesAsync_ReadsShowPinnedOnlyAsFalse_FromAFileSavedBeforeItExisted()
+    {
+        await File.WriteAllTextAsync(_stateFilePath, """
+            {
+              "preferences": {
+                "isMuted": true,
+                "quietHoursStart": null,
+                "quietHoursEnd": null,
+                "watchedRepositories": [],
+                "lastNewTaskWorkspaceDirectory": "C:\\Work"
+              },
+              "readMarkers": {},
+              "customDisplayNames": {}
+            }
+            """);
+        IAppStateStore store = CreateStore();
+
+        var preferences = await store.GetPreferencesAsync();
+
+        Assert.False(preferences.ShowPinnedOnly);
+        Assert.True(preferences.IsMuted);
+        Assert.Equal(@"C:\Work", preferences.LastNewTaskWorkspaceDirectory);
+    }
+
+    [Fact]
+    public async Task SavePreferencesAsync_AddsShowPinnedOnlyToThatFile_AndKeepsTheRest()
+    {
+        await File.WriteAllTextAsync(_stateFilePath, """
+            {
+              "preferences": {
+                "isMuted": true,
+                "quietHoursStart": null,
+                "quietHoursEnd": null,
+                "watchedRepositories": [],
+                "lastNewTaskWorkspaceDirectory": "C:\\Work"
+              },
+              "pinnedSessions": ["session-1"]
+            }
+            """);
+        IAppStateStore store = CreateStore();
+
+        var preferences = await store.GetPreferencesAsync();
+        await store.SavePreferencesAsync(preferences with { ShowPinnedOnly = true });
+
+        var loaded = await store.GetPreferencesAsync();
+        Assert.True(loaded.ShowPinnedOnly);
+        Assert.True(loaded.IsMuted);
+        Assert.Equal(@"C:\Work", loaded.LastNewTaskWorkspaceDirectory);
+        Assert.Equal(["session-1"], await store.GetPinnedSessionIdsAsync());
     }
 
     [Fact]
@@ -229,6 +295,39 @@ public sealed class AppStateStoreTests : IDisposable
         Assert.Equal(["a", "b"], snapshot.Pinned.Select(item => item.SessionId).ToArray());
         Assert.Equal(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero), snapshot.Pinned[0].PinnedAtUtc);
         Assert.Equal(new StickerPlacement(10, null, null, null), snapshot.Pinned[1].Placement);
+    }
+
+    [Fact]
+    public async Task SaveStickersAsync_RoundTripsTheStatusAStickerWasHiddenAt()
+    {
+        var shown = new PinnedSticker("session-1", new DateTimeOffset(2026, 1, 2, 3, 4, 5, TimeSpan.Zero), StickerPlacement.None);
+        var hidden = new PinnedSticker("session-2", new DateTimeOffset(2026, 1, 3, 3, 4, 5, TimeSpan.Zero), new StickerPlacement(10, 20, 300, 150), SessionStatus.Closed);
+
+        await CreateStore().SaveStickersAsync(new StickerSnapshot(new StickerSettings(), [shown, hidden]));
+        var snapshot = await CreateStore().GetStickersAsync();
+
+        Assert.Equal([shown, hidden], snapshot.Pinned);
+        Assert.Null(snapshot.Pinned[0].HiddenAtStatus);
+        Assert.Equal(SessionStatus.Closed, snapshot.Pinned[1].HiddenAtStatus);
+    }
+
+    [Theory]
+    [InlineData("\"hiddenAtStatus\":\"Working\"", SessionStatus.Working)]
+    [InlineData("\"hiddenAtStatus\":\"WaitingForInput\"", SessionStatus.WaitingForInput)]
+    [InlineData("\"hiddenAtStatus\":\"Nonsense\"", null)]
+    [InlineData("\"hiddenAtStatus\":\"working\"", null)]
+    [InlineData("\"hiddenAtStatus\":\"1\"", null)]
+    [InlineData("\"hiddenAtStatus\":null", null)]
+    [InlineData("\"left\":1", null)]
+    public async Task GetStickersAsync_ReadsTheHiddenStatus_AndIgnoresAnythingThatIsNotAStatusName(string field, SessionStatus? expected)
+    {
+        await File.WriteAllTextAsync(
+            _stateFilePath,
+            "{\"stickers\":{\"visible\":true,\"opacity\":0.9,\"pinned\":[{\"sessionId\":\"a\",\"pinnedAtUtc\":\"2026-01-01T00:00:00Z\"," + field + "}]}}");
+
+        var snapshot = await CreateStore().GetStickersAsync();
+
+        Assert.Equal(expected, Assert.Single(snapshot.Pinned).HiddenAtStatus);
     }
 
     [Fact]

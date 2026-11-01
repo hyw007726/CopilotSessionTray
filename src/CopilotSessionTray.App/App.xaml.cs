@@ -86,14 +86,19 @@ public partial class App : Application
         // The window itself only becomes visible as the popup when the
         // user clicks the tray icon (see MainWindow.xaml.cs).
         _mainWindow = _serviceProvider.GetRequiredService<MainWindow>();
-        _mainWindow.InitializeTrayIcon();
-
-        // Starts the continuous background monitor (§10 Phase 3) — real Started/WorkingStateChanged/
-        // Finished/Closed detection + notifications, running for the app's entire lifetime from
-        // here on regardless of what's currently displayed. Started only after the tray icon
-        // exists so the first poll's state is reflected by the icon from the start.
-        _serviceProvider.GetRequiredService<StickerManager>().Start();
-        _serviceProvider.GetRequiredService<TrayViewModel>().StartMonitoring();
+        try
+        {
+            _mainWindow.InitializeTrayIcon();
+        }
+        finally
+        {
+            // Starts the continuous background monitor (§10 Phase 3) — real Started/WorkingStateChanged/
+            // Finished/Closed detection + notifications, running for the app's entire lifetime from
+            // here on regardless of what's currently displayed. Started even if the tray icon could not
+            // be set up: the icon follows the monitor's state whenever it does get created.
+            _serviceProvider.GetRequiredService<StickerManager>().Start();
+            _serviceProvider.GetRequiredService<TrayViewModel>().StartMonitoring();
+        }
     }
 
     private static void ConfigureServices(IServiceCollection services)
@@ -117,6 +122,7 @@ public partial class App : Application
             provider.GetRequiredService<StickerState>(),
             StickerManager.AskWithMessageBox));
 
+        services.AddSingleton<Services.IAlertSound, Services.WindowsAlertSound>();
         services.AddSingleton<INotificationService, Services.NotificationService>();
 
         services.AddSingleton<TrayViewModel>();

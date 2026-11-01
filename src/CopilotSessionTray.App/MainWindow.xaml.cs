@@ -26,8 +26,9 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// Drives the "working" glow, a soft light that breathes outward from the folded palms at the
-    /// centre of the tray icon. Ticks only while <see cref="TrayViewModel.IsAnyWorking"/> is true
-    /// so an idle app spends no CPU on an animation nobody can see.
+    /// centre of the tray icon (red and faster while a session needs the user). Ticks only while
+    /// <see cref="TrayViewModel.IsAnyWorking"/> or <see cref="TrayViewModel.IsAnyNeedingInput"/> is
+    /// true so an idle app spends no CPU on an animation nobody can see.
     /// </summary>
     private readonly DispatcherTimer _pulseTimer;
 
@@ -35,9 +36,13 @@ public partial class MainWindow : Window
 
     private readonly DispatcherTimer _iconSizeWatchTimer;
 
+    private readonly TrayIconStarter _trayIconStarter;
+
     private int _renderedIconSizePx;
 
     private const double PulsePeriodMs = 1600;
+
+    private const double AttentionPulsePeriodMs = 1000;
 
     private const double PulseFloor = 0.25;
 
@@ -86,11 +91,13 @@ public partial class MainWindow : Window
 
         // See UpdateTrayIcon's own doc comment for why this replaces an IconSource XAML binding.
         _viewModel.PropertyChanged += OnViewModelPropertyChangedForTrayIcon;
+
+        _trayIconStarter = new TrayIconStarter(() => TrayIcon.ForceCreate());
     }
 
     private void OnViewModelPropertyChangedForTrayIcon(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(TrayViewModel.IsAnyWorking))
+        if (e.PropertyName is nameof(TrayViewModel.IsAnyWorking) or nameof(TrayViewModel.IsAnyNeedingInput))
         {
             UpdatePulseTimer();
             UpdateTrayIcon();
@@ -99,7 +106,7 @@ public partial class MainWindow : Window
 
     private void UpdatePulseTimer()
     {
-        if (!_viewModel.IsAnyWorking)
+        if (!_viewModel.IsAnyWorking && !_viewModel.IsAnyNeedingInput)
         {
             _pulseTimer.Stop();
         }
@@ -110,9 +117,10 @@ public partial class MainWindow : Window
         }
     }
 
-    private double CurrentGlow()
+    private double CurrentGlow(bool attention)
     {
-        var phase = _pulseClock.Elapsed.TotalMilliseconds % PulsePeriodMs / PulsePeriodMs;
+        var period = attention ? AttentionPulsePeriodMs : PulsePeriodMs;
+        var phase = _pulseClock.Elapsed.TotalMilliseconds % period / period;
         var wave = 0.5 - 0.5 * Math.Cos(2 * Math.PI * phase);
         return PulseFloor + (1 - PulseFloor) * wave;
     }
@@ -167,9 +175,10 @@ public partial class MainWindow : Window
     /// </remarks>
     private void UpdateTrayIcon()
     {
-        var glow = _viewModel.IsAnyWorking ? CurrentGlow() : 0;
+        var attention = _viewModel.IsAnyNeedingInput;
+        var glow = attention || _viewModel.IsAnyWorking ? CurrentGlow(attention) : 0;
         _renderedIconSizePx = TrayIconRenderer.GetShellIconSizePx();
-        using var bitmap = _iconRenderer.Render(_renderedIconSizePx, glow);
+        using var bitmap = _iconRenderer.Render(_renderedIconSizePx, glow, attention);
         var newHandle = TrayIconRenderer.CreateIconHandle(bitmap);
         TrayIcon.Icon = System.Drawing.Icon.FromHandle(newHandle); // Shell_NotifyIcon(NIM_MODIFY) happens synchronously inside this setter.
 
@@ -183,11 +192,12 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// Forces the Win32 tray icon to exist even though this window is never
-    /// shown at startup. Called once from <c>App.OnStartup</c>.
+    /// shown at startup. Called once from <c>App.OnStartup</c>. Returns at once: when Windows has
+    /// no taskbar yet (the app was started at logon before Explorer), the icon is rendered now
+    /// and created as soon as the taskbar appears (<see cref="TrayIconStarter"/>).
     /// </summary>
     public void InitializeTrayIcon()
     {
-        TrayIcon.ForceCreate();
         _iconSizeWatchTimer.Start();
 
         // The pulse timer is otherwise only started in response to a *change* in IsAnyWorking
@@ -196,13 +206,21 @@ public partial class MainWindow : Window
         // event to react to, so it needs this one explicit check here too.
         UpdatePulseTimer();
 
-        UpdateTrayIcon(); // IconSource is no longer bound (see its own comment), so the icon needs
-                          // an explicit first render — nothing will "change" to trigger one otherwise.
+        try
+        {
+            UpdateTrayIcon(); // IconSource is no longer bound (see its own comment), so the icon needs
+                              // an explicit first render — nothing will "change" to trigger one otherwise.
+        }
+        finally
+        {
+            _trayIconStarter.Start();
+        }
     }
 
     /// <summary>Releases the tray icon's native resources on app shutdown.</summary>
     public void ShutdownTrayIcon()
     {
+        _trayIconStarter.Stop();
         _pulseTimer.Stop();
         _iconSizeWatchTimer.Stop();
         TrayIcon.Dispose();

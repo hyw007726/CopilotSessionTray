@@ -29,7 +29,9 @@ namespace CopilotSessionTray.Core.Services;
 /// <see href="https://github.com/github/copilot-cli/issues/4771"/>), the very next poll's registry
 /// read still reflects reality. <c>events.jsonl</c> is tailed purely for enrichment — the
 /// <see cref="SessionChangeEvent.LatestEvent"/> detail and the outcome and duration a finished
-/// session reports — never to decide status.
+/// session reports — never to decide status. Whether a session is blocked on a permission prompt
+/// or a question for the user is read from the same events, but it is reported on its own
+/// (<see cref="SessionChangeEvent.Prompt"/>) and never changes the status.
 /// </para>
 /// <para>
 /// <see cref="SessionChangeKind"/> selection per still-open session, comparing this poll's
@@ -43,7 +45,9 @@ namespace CopilotSessionTray.Core.Services;
 /// at all — see the interface's "empty if nothing changed" contract).</item>
 /// <item>Previously not working, now working → <see cref="SessionChangeKind.WorkingStateChanged"/>
 /// (started a new turn, e.g. after the user replied).</item>
-/// <item>No flag change → no event for that session this poll.</item>
+/// <item>No flag change, but the session started or stopped waiting on the user →
+/// <see cref="SessionChangeKind.NeedsInputChanged"/>.</item>
+/// <item>Neither changed → no event for that session this poll.</item>
 /// </list>
 /// A session seen last poll but no longer in this poll's genuinely-open set → <see cref="SessionChangeKind.Closed"/>.
 /// This also covers the "superseded" case (an older session sharing a pid with a fresher one) —
@@ -104,29 +108,36 @@ public sealed class SessionDetectionEngine : ISessionDetectionEngine
             var tracker = GetTracker(sessionId);
             tracker.Observe(events);
 
+            var prompt = tracker.PendingPrompt;
+
             if (!_tracked.TryGetValue(sessionId, out var previous))
             {
-                _tracked[sessionId] = new TrackedSession(entry.Working);
+                _tracked[sessionId] = new TrackedSession(entry.Working, prompt);
                 var startedStatus = entry.Working ? SessionStatus.Working : SessionStatus.WaitingForInput;
                 changes.Add(new SessionChangeEvent(
-                    sessionId, SessionChangeKind.Started, startedStatus, now, latestEvent, tracker.Outcome, Request: tracker.Request));
+                    sessionId, SessionChangeKind.Started, startedStatus, now, latestEvent, tracker.Outcome, Request: tracker.Request, Prompt: prompt));
                 continue;
             }
 
+            _tracked[sessionId] = new TrackedSession(entry.Working, prompt);
             if (previous.WasWorking && !entry.Working)
             {
-                _tracked[sessionId] = previous with { WasWorking = false };
                 changes.Add(new SessionChangeEvent(
-                    sessionId, SessionChangeKind.Finished, SessionStatus.Finished, now, latestEvent, tracker.Outcome, tracker.WorkedFor, tracker.Request));
+                    sessionId, SessionChangeKind.Finished, SessionStatus.Finished, now, latestEvent, tracker.Outcome, tracker.WorkedFor, tracker.Request, prompt));
             }
             else if (!previous.WasWorking && entry.Working)
             {
-                _tracked[sessionId] = previous with { WasWorking = true };
                 changes.Add(new SessionChangeEvent(
-                    sessionId, SessionChangeKind.WorkingStateChanged, SessionStatus.Working, now, latestEvent, Request: tracker.Request));
+                    sessionId, SessionChangeKind.WorkingStateChanged, SessionStatus.Working, now, latestEvent, Request: tracker.Request, Prompt: prompt));
+            }
+            else if (previous.Prompt != prompt)
+            {
+                var status = entry.Working ? SessionStatus.Working : SessionStatus.WaitingForInput;
+                changes.Add(new SessionChangeEvent(
+                    sessionId, SessionChangeKind.NeedsInputChanged, status, now, latestEvent, Prompt: prompt));
             }
 
-            // No flag change: nothing to report for this session this poll, per this interface's
+            // Nothing changed: nothing to report for this session this poll, per this interface's
             // documented "empty if nothing changed" contract.
         }
 
@@ -179,6 +190,6 @@ public sealed class SessionDetectionEngine : ISessionDetectionEngine
         }
     }
 
-    /// <summary>This engine's own per-session bookkeeping between polls — just the last known <see cref="OpenSessionEntry.Working"/> flag.</summary>
-    private sealed record TrackedSession(bool WasWorking);
+    /// <summary>This engine's own per-session bookkeeping between polls — the last known <see cref="OpenSessionEntry.Working"/> flag and whether the session was blocked on the user.</summary>
+    private sealed record TrackedSession(bool WasWorking, PendingPrompt Prompt);
 }
