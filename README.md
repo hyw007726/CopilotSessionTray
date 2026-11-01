@@ -20,13 +20,21 @@ backdrop, so nothing here comes from anyone's actual work.
 
 **The session popup.** Left-click the tray icon to see your open Copilot CLI
 sessions and the most recently closed ones, each with its state, its folder and
-how long it has been in that state. Each row's buttons resume the session in a
+how long it has been in that state. A session that is waiting for you, on a
+permission prompt or a question, shows a red dot and a bold "Needs input" on a
+light red row. Each row's buttons resume the session in a
 new terminal, show its summary or remove it from the list; below them, 📌 Pin
 keeps the session at the top of the list (marked with a small 📌, and kept even
-when it is old) and 🖥 Add sticker puts it on your desktop. The slider at the
+when it is old) and 🖥 Add sticker puts it on your desktop. Ticking "📌 Pinned
+only" at the top right of the popup narrows the list to just the pinned
+sessions. The slider at the
 bottom sets how see-through the stickers are. "🗒 Summary" shows what a session
 is about (its latest checkpoint, or a recap of its first request and latest
-reply) without opening the terminal it runs in.
+reply) without opening the terminal it runs in. Scrolling follows your wheel or
+touchpad in proportion — a wheel notch moves the list three lines of 16 px (or
+what Windows' "lines to scroll at a time" says) and a light touchpad swipe moves
+it a little — in the popup, the history window, the Summary panel and the
+new-task prompt.
 
 <table>
   <tr>
@@ -36,26 +44,31 @@ reply) without opening the terminal it runs in.
 </table>
 
 **Stickers and balloons.** A session with a sticker becomes a note on the
-desktop, green while the session works and light yellow otherwise. Drag it to
+desktop, green while the session works, red while it waits for you and light
+yellow otherwise. Drag it to
 move it, drag an edge to resize it (the text scales with it), click ✕ to hide it
-until the session's next state change (its row's button then reads "🖥 Show
-sticker"), or double-click it to resume the session with its history. When a
-session finishes, a colorful balloon floats up from just above the taskbar with
-what the turn reported; click it to pop it.
+until the session's next state change, even across restarts (its row's button
+then reads "🖥 Show sticker"), or double-click it to resume the session with its
+history. When a session finishes, a colorful balloon floats up from just above
+the taskbar with what the turn reported; click it to pop it. When a session
+starts waiting for you, a red balloon floats up the same way and the Windows
+notification sound plays; it pops by itself once you answer.
 
 <table>
   <tr>
-    <td valign="top"><img src="docs/images/stickers.png" width="300" alt="Three session stickers: one green while its session works and two light yellow, one of them resized with larger text"></td>
-    <td valign="top"><img src="docs/images/balloons.png" width="560" alt="Three colorful notification balloons, each titled with a session name and showing what its turn reported"></td>
+    <td valign="top"><img src="docs/images/stickers.png" width="300" alt="Four session stickers: one green while its session works, one red because its session needs input, and two light yellow, one of them resized with larger text"></td>
+    <td valign="top"><img src="docs/images/balloons.png" width="560" alt="Three notification balloons: a blue and a purple one, each titled with a session name and showing what its turn reported, and a red one saying the session needs your approval"></td>
   </tr>
 </table>
 
 **The tray icon.** The gold glyph stays plain while nothing is working and
-glows from its folded palms while a session is. Right-click it for the menu.
+glows from its folded palms while a session is. It turns red and pulses faster
+while any session is waiting for you, and its tooltip counts them. Right-click
+it for the menu.
 
 <table>
   <tr>
-    <td valign="top"><img src="docs/images/tray.png" width="520" alt="The tray icon when idle, and as its glow breathes while a session is working"></td>
+    <td valign="top"><img src="docs/images/tray.png" width="560" alt="The tray icon when idle, as its glow breathes while a session is working, and red and pulsing while a session needs input"></td>
     <td valign="top"><img src="docs/images/menu.png" width="295" alt="The tray icon's right-click menu"></td>
   </tr>
 </table>
@@ -103,7 +116,8 @@ working run-at-startup toggle round out the shell. Sessions sitting
 open-but-not-working render as a neutral "Idle" rather than a confident
 "waiting for input" or "completed" claim — Copilot CLI's own data can't
 actually distinguish "paused mid-conversation" from "finished a while
-ago", so this app doesn't pretend to (the enum values/UI slots for a real
+ago", so this app doesn't pretend to (the one wait it can see for certain,
+a pending permission prompt or question, shows in red; see "Try it" below; the enum values/UI slots for a real
 distinction are kept as an intentional, documented stub — not deleted —
 ready to wire up if a future Copilot CLI version exposes a genuine
 signal; see IMPLEMENTATION_PLAN.md §9.6's later follow-ups). A finished
@@ -138,7 +152,9 @@ IMPLEMENTATION_PLAN.md §3/§9). Wiring is via
 `Microsoft.Extensions.DependencyInjection`, composed once in
 `App.xaml.cs`. Run-at-startup (optional, toggled from the tray menu) uses
 a Scheduled Task with crash-recovery, not a plain Registry Run key — see
-IMPLEMENTATION_PLAN.md §9.3. See [`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md)
+IMPLEMENTATION_PLAN.md §9.3. Started at logon a moment before Explorer has
+made the taskbar, the app still starts: it renders its icon, begins monitoring,
+and puts the icon in the tray as soon as the taskbar appears. See [`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md)
 §9.1-§9.7/§10 for the full up-to-date picture: the 2026-09-29 design-review
 pass, four same-day bug fixes/features from 2026-10-01 ("Resume with
 Summary" prompt quality + provenance header, live view as the startup
@@ -177,22 +193,27 @@ src/
                                        session title + resume-seed resolution (workspace.yaml name,
                                        checkpoints, the database), the reader-facing summary view and the
                                        small markdown reader behind it, the SessionDetectionEngine
-                                       poll/diff "brain" (incl. what each turn reported and how long it
-                                       took), events.jsonl tailing, the rules behind the desktop
-                                       stickers (their state, layout and gist), and the sessions
-                                       pinned to the top of the list
-  CopilotSessionTray.Core.Tests/      xUnit tests (426), fixture-based — every service takes an optional
+                                       poll/diff "brain" (incl. what each turn reported, how long it
+                                       took and whether it waits on a permission prompt or a question),
+                                       events.jsonl tailing, the rules behind the desktop
+                                       stickers (their state, layout and gist), the sessions
+                                       pinned to the top of the list, when to alert you that a
+                                       session needs you, and how far a wheel event scrolls
+  CopilotSessionTray.Core.Tests/      xUnit tests (520), fixture-based — every service takes an optional
                                        path override so tests never touch the real .copilot folder (the
                                        launch-script tests also run the generated script through cmd.exe)
   CopilotSessionTray.App/             WPF tray shell, DI composition root in App.xaml.cs
     ViewModels/                       TrayViewModel (demo scenarios + live data + background monitor) + SessionItemViewModel
     Services/                         StartupRegistration (Registry Run-key toggle) + NotificationService
-                                       (one floating balloon per finished session — Core stays UI-agnostic)
+                                       (one floating balloon per finished session, and a red one with a sound
+                                       for a session that needs you — Core stays UI-agnostic) + WindowsAlertSound
     MainWindow.xaml                   Hosts the TaskbarIcon + doubles as the click-to-show session popup
     BalloonWindow.xaml                One notification balloon: a transparent, non-activating window drawn as a glossy party balloon
     SessionSummaryWindow.xaml         The "🗒 Summary" panel: a session's summary as formatted, selectable text (SummaryDocumentBuilder.cs)
     Stickers/                         StickerWindow (a borderless, always-on-top desktop sticker that never takes focus) + StickerManager (one per session with a sticker)
-    TrayIconRenderer.cs               Draws the tray icon: exact-size, emboldened gold glyph + a radial glow from the palms
+    TrayIconRenderer.cs               Draws the tray icon: exact-size, emboldened gold glyph + a radial glow from the palms (red while a session needs you)
+    TrayIconStarter.cs                Creates the tray icon, retrying until Windows has a taskbar (the app started at logon before Explorer)
+    WheelScrolling.cs                 Opt-in wheel/touchpad scrolling in proportion to the size of each event (the lists, the Summary text, the prompt box)
 docs/
   images/                             The screenshots in this README, rendered from made-up sample sessions
 ```
@@ -219,15 +240,16 @@ that took under 30 seconds doesn't get one. They stay until you pop them by
 clicking (they're plain windows this
 app draws, not native OS balloons — those are capped at 10-30s by Windows
 itself, not overridable; see IMPLEMENTATION_PLAN.md §9.7's follow-ups). Each
-session gets its own balloon in its own color; a repeat completion from a
+session gets its own balloon in its own color (never red, which is kept for the
+alert below); a repeat completion from a
 session that already has one refreshes it with a little wobble rather than
 adding a duplicate. Clicking a balloon pops just that one and the rest float
 up to fill the gap; when more are up than fit at full size they overlap
 (newest in front) so every one stays on screen and clickable. Balloons never
 take keyboard focus from whatever you're typing in, and clicks on the
 transparent space around a balloon go to the window behind it. "Preview
-notifications" in the tray menu shows three sample balloons, so you can see
-the look without waiting for a session to finish.
+notifications" in the tray menu shows three sample balloons, one of them the
+red alert and its sound, so you can see the look without waiting for a session.
 Popping a balloon just dismisses it — it doesn't open the popup too,
 since there's no way for this app to actually jump to the session's own
 already-open terminal anyway, so forcing another window open wouldn't add
@@ -238,9 +260,13 @@ IMPLEMENTATION_PLAN.md §9.7's final follow-up).
 A session's name — in the popup, the balloons and the Summary panel — is your
 own `/rename` if you gave it one, otherwise the latest checkpoint's title,
 otherwise the session database's summary (usually the first prompt, cut
-short); renaming it in this app overrides all of those. A session that was
-started with "Resume with summary" shows `↪ resumed from "<original title>"`
-on its detail line, and the seed it passes on carries the checkpoint's next
+short); renaming it in this app overrides all of those. In the popup and the
+history window a long name is cut to one line with "…" and a long folder path
+wraps, so neither list scrolls sideways; rest the pointer on the name for a
+moment and a tooltip shows the whole title, wrapped (up to 1,000 characters). A
+session that was started with "Resume with summary" shows `↪ resumed from "<original title>"`
+on its detail line (cut to 60 characters, with the whole title in a tooltip on
+that line), and the seed it passes on carries the checkpoint's next
 steps and asks the new session to acknowledge in one line and wait.
 "🗒 Summary" shows a session's summary the way you'd read it: where it came
 from ("Checkpoint 2 · 38m ago", or "No checkpoint yet · recap of the first
@@ -257,25 +283,68 @@ Pin a session with its "📌 Pin" button to keep it at the top of the list: pinn
 rows sit above the others (open sessions first, each group in its usual order),
 carry a small 📌 beside their name, are remembered across restarts, and stay in
 the list even when they are old or past the ten most recent closed sessions,
-which they do not use up. "📌 Unpin" lets go. Put a session on the desktop with
+which they do not use up. "📌 Unpin" lets go. Tick "📌 Pinned only" in the popup's
+header to list just the pinned sessions: the choice is remembered across restarts,
+a pin or unpin takes effect in the list at once, and with nothing pinned the list
+says "No pinned sessions" instead of staying blank. It filters the list and nothing
+else — the tray icon, its tooltip and the stickers still count every session, so
+a session that needs you turns the tray icon red even while its row is hidden.
+Put a session on the desktop with
 its "🖥 Add sticker" button and a sticker for it appears, from the top-left
 corner down the left edge (wrapping into further columns). A sticker shows the
 session's name, the gist — what the session is working on, or what its last turn
 reported — and a line such as "Working · 12m · opened 1h 5m ago" (its state, how
 long it has been in it, and how long ago the session was opened); it is green
-while the session works and light yellow otherwise. Stickers stay on top of other
+while the session works, red while it waits for you and light yellow otherwise. Rest the pointer on a sticker
+and a tooltip shows its whole title, its gist and its time line, wrapped; the ✕
+keeps its own tooltip. Stickers stay on top of other
 windows and never take keyboard focus. Drag one to move it; drag its right edge,
 bottom edge or corner to resize it, and its text grows or shrinks with it (never
 below 85% of the default size); each remembers its place and size. The ✕ hides a
 sticker until that session's next state change, and meanwhile its row's button
-reads "🖥 Show sticker", which brings it back at once; a double-click resumes the
-session with its history in a new terminal after a Yes/No confirmation. The
-slider at the bottom of the popup sets the transparency of all stickers, "Show
-stickers" in the tray menu hides or shows them all, and "🖥 Remove sticker"
-removes one. A pin and a sticker are independent: neither implies the other, and
-"✕ Remove" clears both along with the row. Pins, stickers, places and the slider
-survive restarts, though a sticker hidden with ✕ is shown again after one (see
+reads "🖥 Show sticker", which brings it back at once; the hide is remembered
+across restarts, and a session whose status changed while the app was not
+running (it finished, was closed or was resumed) shows its sticker again. A
+double-click resumes the session with its history in a new terminal after a
+Yes/No confirmation. The slider at the bottom of the popup sets the transparency
+of all stickers, "Show stickers" in the tray menu hides or shows them all, and
+"🖥 Remove sticker" removes one. A pin and a sticker are independent: neither
+implies the other, and "✕ Remove" clears both along with the row. Pins,
+stickers, places, the slider, hidden stickers and "Pinned only" survive restarts (see
 IMPLEMENTATION_PLAN.md §9.8).
+A session that is waiting for you turns red. When a session is blocked on a
+permission prompt (to run a command, change a file, fetch a URL or use a tool) or
+on a question (the agent's `ask_user`, or a plan to approve), its row in the
+popup gets a light red background, a red dot and a bold "Needs input · 2m" (rest
+the pointer on it to see whether it waits for an approval or for an answer), its
+sticker turns red, and the tray icon turns red and pulses, faster than its working
+glow, with its tooltip counting the sessions that need you. Nothing is installed
+into Copilot for this: the monitor reads the `events.jsonl` it already follows,
+where a request is open from its `permission.requested` event (or from the start of
+an `ask_user` or `exit_plan_mode` tool call) until the matching `permission.completed`
+(or until that tool call completes), and an abort, a shutdown or a resume drops
+whatever was pending. Red appears within the 3-second poll and goes when you
+answer. A prompt that is settled within a poll (an automatic approval, or the
+CLI's own "the user is not available" reply) usually never shows, and can
+occasionally flash red for up to 3 seconds, with its balloon and sound. It sits
+on top of the row's status, which stays Working or Idle as before.
+A sticker you hid with ✕ comes back when its session starts to need you; one you
+hide while it is red stays hidden until something changes. A prompt that is already
+pending when the app starts is red from the first poll, timed from when it was
+raised, and a session that closes is no longer red. Prompts Copilot does not write
+to the log, such as a form an MCP server opens, are not seen.
+A session that starts waiting for you also raises an alert: a red balloon floats up
+the right edge, titled with the session's name and saying "Needs your approval"
+(a permission prompt) or "Needs your answer" (a question, or a plan to approve),
+and the Windows notification sound plays — the one set for "Notification" in the
+Sound settings, through the System Sounds volume, at most once every two seconds
+however many sessions ask at once. It is a balloon of its own, separate from the
+one a finished turn leaves, and it pops by itself when the wait is over (answered,
+aborted or the session closed) as well as when you click it. One alert is raised
+per wait: a second request while the first is still pending, or a click on the
+balloon, does not raise another. "Mute notifications" silences the balloon and the
+sound together. A wait that was already going when the app started is shown red
+but never rings, so starting or restarting the app does not replay old prompts.
 Each terminal this app opens (resume/start new task) gets its own
 distinct background color so concurrent panes are easy to tell apart.
 Quit is the only way to fully
