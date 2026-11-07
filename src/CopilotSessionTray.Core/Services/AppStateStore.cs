@@ -7,7 +7,7 @@ namespace CopilotSessionTray.Core.Services;
 
 /// <summary>
 /// Real implementation of <see cref="IAppStateStore"/> — persists this
-/// app's own state (read markers, preferences, custom display names, sticker pins, panel pins) as a
+/// app's own state (read markers, preferences, custom display names, sticker pins, panel pins, session labels, terminal colors) as a
 /// single small JSON file under <c>%LOCALAPPDATA%\CopilotSessionTray\</c>,
 /// entirely separate from anything under <c>.copilot</c>. A
 /// <see cref="SemaphoreSlim"/> serializes read-modify-write operations
@@ -145,6 +145,48 @@ public sealed class AppStateStore : IAppStateStore
         await MutateAsync(state => state.PinnedSessions = CleanIds(sessionIds), cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<IReadOnlyDictionary<string, SessionLabel>> GetSessionLabelsAsync(CancellationToken cancellationToken = default)
+    {
+        var state = await LoadAsync(cancellationToken).ConfigureAwait(false);
+        var labels = new Dictionary<string, SessionLabel>(StringComparer.Ordinal);
+        foreach (var (sessionId, stored) in state.SessionLabels ?? new Dictionary<string, StoredLabel?>())
+        {
+            if (!string.IsNullOrWhiteSpace(sessionId) && SessionLabels.Normalize(stored?.Text) is { } text)
+            {
+                labels[sessionId] = new SessionLabel(text, SessionLabelPalette.Wrap(stored!.ColorIndex));
+            }
+        }
+
+        return labels;
+    }
+
+    public async Task SaveSessionLabelsAsync(IReadOnlyDictionary<string, SessionLabel> labels, CancellationToken cancellationToken = default)
+    {
+        await MutateAsync(state => state.SessionLabels = labels.ToDictionary(
+            pair => pair.Key,
+            pair => (StoredLabel?)new StoredLabel { Text = pair.Value.Text, ColorIndex = pair.Value.ColorIndex }),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<TerminalLaunch>> GetTerminalLaunchesAsync(CancellationToken cancellationToken = default)
+    {
+        var state = await LoadAsync(cancellationToken).ConfigureAwait(false);
+        return (state.TerminalLaunches ?? new List<StoredTerminalLaunch?>())
+            .OfType<StoredTerminalLaunch>()
+            .Select(stored => new TerminalLaunch(
+                TerminalPalette.Wrap(stored.Slot),
+                string.IsNullOrWhiteSpace(stored.SessionId) ? null : stored.SessionId))
+            .ToList();
+    }
+
+    public async Task SaveTerminalLaunchesAsync(IReadOnlyList<TerminalLaunch> launches, CancellationToken cancellationToken = default)
+    {
+        await MutateAsync(state => state.TerminalLaunches = launches
+            .Select(launch => (StoredTerminalLaunch?)new StoredTerminalLaunch { Slot = launch.Slot, SessionId = launch.SessionId })
+            .ToList(),
+            cancellationToken).ConfigureAwait(false);
+    }
+
     private static List<string> CleanIds(IEnumerable<string?> sessionIds) =>
         sessionIds.Where(id => !string.IsNullOrWhiteSpace(id)).Select(id => id!).Distinct().ToList();
 
@@ -219,6 +261,24 @@ public sealed class AppStateStore : IAppStateStore
         public StoredStickers? Stickers { get; set; }
 
         public List<string>? PinnedSessions { get; set; }
+
+        public Dictionary<string, StoredLabel?>? SessionLabels { get; set; }
+
+        public List<StoredTerminalLaunch?>? TerminalLaunches { get; set; }
+    }
+
+    private sealed class StoredLabel
+    {
+        public string? Text { get; set; }
+
+        public int ColorIndex { get; set; }
+    }
+
+    private sealed class StoredTerminalLaunch
+    {
+        public int Slot { get; set; }
+
+        public string? SessionId { get; set; }
     }
 
     private sealed class StoredStickers

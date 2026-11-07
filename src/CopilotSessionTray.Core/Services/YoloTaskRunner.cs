@@ -20,12 +20,19 @@ namespace CopilotSessionTray.Core.Services;
 /// </summary>
 public sealed class YoloTaskRunner : IYoloTaskRunner
 {
-    public Task StartInteractiveAsync(
+    private readonly TerminalColors _terminalColors;
+
+    public YoloTaskRunner(TerminalColors terminalColors)
+    {
+        _terminalColors = terminalColors;
+    }
+
+    public async Task StartInteractiveAsync(
         string prompt, string workingDirectory, bool allowAllPermissions = true, CancellationToken cancellationToken = default)
     {
         var sanitized = CopilotTerminalLauncher.SanitizeForCmdExe(prompt);
-        CopilotTerminalLauncher.Launch($"-i \"{sanitized}\"", workingDirectory, allowAllPermissions);
-        return Task.CompletedTask;
+        var color = await _terminalColors.PickAsync(null, cancellationToken).ConfigureAwait(false);
+        CopilotTerminalLauncher.Launch($"-i \"{sanitized}\"", workingDirectory, color, allowAllPermissions);
     }
 
     public async Task<YoloTaskResult> RunHeadlessAsync(string prompt, string workingDirectory, CancellationToken cancellationToken = default)

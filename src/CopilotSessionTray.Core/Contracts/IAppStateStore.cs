@@ -4,8 +4,9 @@ namespace CopilotSessionTray.Core.Contracts;
 
 /// <summary>
 /// Persists this application's own state — read/unread markers, user
-/// preferences, local display-name overrides, sticker settings and pins, and the sessions pinned
-/// to the top of the panel — entirely separate from
+/// preferences, local display-name overrides, sticker settings and pins, the sessions pinned
+/// to the top of the panel, the labels put on sessions, and the colors of the terminals it
+/// opened — entirely separate from
 /// Copilot CLI's <c>.copilot</c> folder (typically under
 /// <c>%LOCALAPPDATA%\CopilotSessionTray\</c>). Copilot CLI has no native
 /// "unread" concept; this app owns it end to end.
@@ -70,5 +71,23 @@ public interface IAppStateStore
     /// <param name="sessionIds">The pinned session ids, oldest pin first.</param>
     /// <param name="cancellationToken">Token to cancel the operation.</param>
     Task SavePinnedSessionIdsAsync(IReadOnlyList<string> sessionIds, CancellationToken cancellationToken = default);
+
+    /// <summary>Gets the labels the user put on sessions, by session id, or an empty map if there are none.</summary>
+    /// <param name="cancellationToken">Token to cancel the operation.</param>
+    Task<IReadOnlyDictionary<string, SessionLabel>> GetSessionLabelsAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Replaces the saved session labels.</summary>
+    /// <param name="labels">The labels, by session id.</param>
+    /// <param name="cancellationToken">Token to cancel the operation.</param>
+    Task SaveSessionLabelsAsync(IReadOnlyDictionary<string, SessionLabel> labels, CancellationToken cancellationToken = default);
+
+    /// <summary>Gets the terminals this app opened, newest first, or an empty list if there are none.</summary>
+    /// <param name="cancellationToken">Token to cancel the operation.</param>
+    Task<IReadOnlyList<TerminalLaunch>> GetTerminalLaunchesAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Replaces the saved list of terminals this app opened.</summary>
+    /// <param name="launches">The opened terminals, newest first.</param>
+    /// <param name="cancellationToken">Token to cancel the operation.</param>
+    Task SaveTerminalLaunchesAsync(IReadOnlyList<TerminalLaunch> launches, CancellationToken cancellationToken = default);
 }
 

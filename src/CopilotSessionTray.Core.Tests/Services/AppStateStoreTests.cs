@@ -393,6 +393,149 @@ public sealed class AppStateStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task GetSessionLabelsAsync_ReturnsNothing_WhenNeverSaved()
+    {
+        Assert.Empty(await CreateStore().GetSessionLabelsAsync());
+    }
+
+    [Fact]
+    public async Task SaveSessionLabelsAsync_RoundTripsTextAndColor_AndAnEmptyMapClearsThem()
+    {
+        IAppStateStore store = CreateStore();
+        var labels = new Dictionary<string, SessionLabel>
+        {
+            ["session-1"] = new("bug", 0),
+            ["session-2"] = new("needs a look", 7),
+        };
+
+        await store.SaveSessionLabelsAsync(labels);
+        var loaded = await CreateStore().GetSessionLabelsAsync();
+
+        Assert.Equal(labels, loaded);
+
+        await store.SaveSessionLabelsAsync(new Dictionary<string, SessionLabel>());
+
+        Assert.Empty(await CreateStore().GetSessionLabelsAsync());
+    }
+
+    [Fact]
+    public async Task SessionLabels_ReadTheDocumentedFileFormat_AndToleratesAFileWrittenBeforeTheyExisted()
+    {
+        await File.WriteAllTextAsync(_stateFilePath, "{\"sessionLabels\":{\"a\":{\"text\":\"bug\",\"colorIndex\":2}}}");
+        var labels = await CreateStore().GetSessionLabelsAsync();
+        Assert.Equal(new SessionLabel("bug", 2), Assert.Single(labels).Value);
+
+        await File.WriteAllTextAsync(_stateFilePath, "{\"readMarkers\":{},\"customDisplayNames\":{\"a\":\"My name\"},\"pinnedSessions\":[\"a\"]}");
+        Assert.Empty(await CreateStore().GetSessionLabelsAsync());
+    }
+
+    [Fact]
+    public async Task SessionLabels_AndTheRestOfTheState_DoNotOverwriteEachOther()
+    {
+        IAppStateStore store = CreateStore();
+        var sticker = new PinnedSticker("session-9", new DateTimeOffset(2026, 1, 2, 3, 4, 5, TimeSpan.Zero), StickerPlacement.None);
+
+        await store.SetCustomDisplayNameAsync("session-1", "My name");
+        await store.SavePinnedSessionIdsAsync(["session-1"]);
+        await store.SaveStickersAsync(new StickerSnapshot(new StickerSettings(false, 0.6), [sticker]));
+        await store.SaveSessionLabelsAsync(new Dictionary<string, SessionLabel> { ["session-1"] = new("bug", 1) });
+        await store.SavePinnedSessionIdsAsync(["session-2"]);
+        await store.SetCustomDisplayNameAsync("session-1", "Another name");
+
+        Assert.Equal(new SessionLabel("bug", 1), Assert.Single(await store.GetSessionLabelsAsync()).Value);
+        Assert.Equal("Another name", await store.GetCustomDisplayNameAsync("session-1"));
+        Assert.Equal(["session-2"], await store.GetPinnedSessionIdsAsync());
+        Assert.Equal([sticker], (await store.GetStickersAsync()).Pinned);
+    }
+
+    [Fact]
+    public async Task GetSessionLabelsAsync_CleansUpAHandEditedFile()
+    {
+        await File.WriteAllTextAsync(
+            _stateFilePath,
+            "{\"sessionLabels\":{" +
+            "\"a\":{\"text\":\"  spaced   out \",\"colorIndex\":-1}," +
+            "\"b\":{\"text\":\"   \",\"colorIndex\":1}," +
+            "\"c\":null," +
+            "\"d\":{\"colorIndex\":3}," +
+            "\"  \":{\"text\":\"no session\",\"colorIndex\":1}," +
+            "\"e\":{\"text\":\"" + new string('x', 90) + "\",\"colorIndex\":25}}}");
+
+        var labels = await CreateStore().GetSessionLabelsAsync();
+
+        Assert.Equal(["a", "e"], labels.Keys.Order());
+        Assert.Equal(new SessionLabel("spaced out", SessionLabelPalette.Count - 1), labels["a"]);
+        Assert.Equal(SessionLabels.MaxLength, labels["e"].Text.Length);
+        Assert.Equal(5, labels["e"].ColorIndex);
+    }
+
+    [Fact]
+    public async Task GetTerminalLaunchesAsync_ReturnsNothing_WhenNeverSaved()
+    {
+        Assert.Empty(await CreateStore().GetTerminalLaunchesAsync());
+    }
+
+    [Fact]
+    public async Task SaveTerminalLaunchesAsync_RoundTripsInOrder_AndAnEmptyListClearsThem()
+    {
+        IAppStateStore store = CreateStore();
+        TerminalLaunch[] launches = [new(4, "session-1"), new(0, null), new(8, "session-2")];
+
+        await store.SaveTerminalLaunchesAsync(launches);
+
+        Assert.Equal(launches, await CreateStore().GetTerminalLaunchesAsync());
+
+        await store.SaveTerminalLaunchesAsync([]);
+
+        Assert.Empty(await CreateStore().GetTerminalLaunchesAsync());
+    }
+
+    [Fact]
+    public async Task TerminalLaunches_ReadTheDocumentedFileFormat_AndToleratesAFileWrittenBeforeTheyExisted()
+    {
+        await File.WriteAllTextAsync(_stateFilePath, "{\"terminalLaunches\":[{\"slot\":2,\"sessionId\":\"a\"},{\"slot\":5,\"sessionId\":null}]}");
+        Assert.Equal([new TerminalLaunch(2, "a"), new TerminalLaunch(5, null)], await CreateStore().GetTerminalLaunchesAsync());
+
+        await File.WriteAllTextAsync(_stateFilePath, "{\"readMarkers\":{},\"customDisplayNames\":{\"a\":\"My name\"},\"pinnedSessions\":[\"a\"]}");
+        Assert.Empty(await CreateStore().GetTerminalLaunchesAsync());
+    }
+
+    [Fact]
+    public async Task TerminalLaunches_AndTheRestOfTheState_DoNotOverwriteEachOther()
+    {
+        IAppStateStore store = CreateStore();
+
+        await store.SetCustomDisplayNameAsync("session-1", "My name");
+        await store.SaveSessionLabelsAsync(new Dictionary<string, SessionLabel> { ["session-1"] = new("bug", 1) });
+        await store.SaveTerminalLaunchesAsync([new TerminalLaunch(3, "session-1")]);
+        await store.SavePinnedSessionIdsAsync(["session-2"]);
+        await store.SetCustomDisplayNameAsync("session-1", "Another name");
+
+        Assert.Equal([new TerminalLaunch(3, "session-1")], await store.GetTerminalLaunchesAsync());
+        Assert.Equal("Another name", await store.GetCustomDisplayNameAsync("session-1"));
+        Assert.Equal(["session-2"], await store.GetPinnedSessionIdsAsync());
+        Assert.Equal(new SessionLabel("bug", 1), Assert.Single(await store.GetSessionLabelsAsync()).Value);
+    }
+
+    [Fact]
+    public async Task GetTerminalLaunchesAsync_CleansUpAHandEditedFile()
+    {
+        await File.WriteAllTextAsync(
+            _stateFilePath,
+            "{\"terminalLaunches\":[" +
+            "{\"slot\":-1,\"sessionId\":\"a\"}," +
+            "null," +
+            "{\"slot\":25,\"sessionId\":\"   \"}," +
+            "{\"sessionId\":\"b\"}]}");
+
+        var launches = await CreateStore().GetTerminalLaunchesAsync();
+
+        Assert.Equal(
+            [new TerminalLaunch(TerminalPalette.Count - 1, "a"), new TerminalLaunch(7, null), new TerminalLaunch(0, "b")],
+            launches);
+    }
+
+    [Fact]
     public async Task MutateAsync_CreatesParentDirectory_WhenMissing()
     {
         var nestedPath = Path.Combine(Path.GetTempPath(), $"appstate-tests-nested-{Guid.NewGuid():N}", "app-state.json");

@@ -124,6 +124,7 @@ public sealed partial class TrayViewModel : ObservableObject
         _notificationService = notificationService;
         _stickerState = stickerState;
         _sessionPins = new SessionPins(appStateStore);
+        _sessionLabels = new SessionLabels(appStateStore);
 
         _monitorTimer = new DispatcherTimer { Interval = MonitorPollInterval };
         _monitorTimer.Tick += async (_, _) => await OnMonitorTimerTickAsync();
@@ -167,6 +168,7 @@ public sealed partial class TrayViewModel : ObservableObject
     {
         await LoadStickerStateAsync();
         await LoadPinsAsync();
+        await LoadLabelsAsync();
         await LoadLiveSessionsScenarioAsync();
         await OnMonitorTimerTickAsync();
     }
@@ -359,11 +361,11 @@ public sealed partial class TrayViewModel : ObservableObject
             return;
         }
 
-        var clearsKept = session.IsPinned || session.HasSticker;
+        var clearsKept = session.IsPinned || session.HasSticker || session.HasLabel;
         var result = MessageBox.Show(
             $"Remove '{session.DisplayName}' from this list?{Environment.NewLine}{Environment.NewLine}" +
             "This only removes it from view here — it does not close or delete the real Copilot session." +
-            (clearsKept ? $"{Environment.NewLine}{Environment.NewLine}It is pinned or has a sticker; removing it clears those too." : string.Empty),
+            (clearsKept ? $"{Environment.NewLine}{Environment.NewLine}It is pinned, has a sticker or has a label; removing it clears those too." : string.Empty),
             "Copilot Session Tray",
             MessageBoxButton.YesNo,
             MessageBoxImage.Question,
@@ -393,6 +395,11 @@ public sealed partial class TrayViewModel : ObservableObject
             {
                 session.IsPinned = false;
                 await _sessionPins.SetPinnedAsync(session.Id, false);
+            }
+
+            if (session.HasLabel)
+            {
+                await SetLabelAsync(session, null);
             }
 
             await PersistReadMarkerAsync(session.Id, isDismissed: true);
@@ -1282,6 +1289,7 @@ public sealed partial class TrayViewModel : ObservableObject
 
         item.IsPinned = _sessionPins.IsPinned(item.Id);
         item.HasSticker = _stickerState.IsPinned(item.Id);
+        item.ApplyLabel(_sessionLabels.Get(item.Id));
 
         if (atTop)
         {

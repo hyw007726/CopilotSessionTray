@@ -11,16 +11,23 @@ namespace CopilotSessionTray.Core.Services;
 /// </summary>
 public sealed class SessionLauncher : ISessionLauncher
 {
-    public Task ResumeInTerminalAsync(string sessionId, string? workingDirectory, CancellationToken cancellationToken = default)
+    private readonly TerminalColors _terminalColors;
+
+    public SessionLauncher(TerminalColors terminalColors)
     {
-        CopilotTerminalLauncher.Launch($"--resume={sessionId}", workingDirectory);
-        return Task.CompletedTask;
+        _terminalColors = terminalColors;
     }
 
-    public Task StartNewSessionFromSummaryAsync(string summaryPrompt, string? workingDirectory, CancellationToken cancellationToken = default)
+    public async Task ResumeInTerminalAsync(string sessionId, string? workingDirectory, CancellationToken cancellationToken = default)
+    {
+        var color = await _terminalColors.PickAsync(sessionId, cancellationToken).ConfigureAwait(false);
+        CopilotTerminalLauncher.Launch($"--resume={sessionId}", workingDirectory, color);
+    }
+
+    public async Task StartNewSessionFromSummaryAsync(string summaryPrompt, string? workingDirectory, CancellationToken cancellationToken = default)
     {
         var sanitized = CopilotTerminalLauncher.SanitizeForCmdExe(summaryPrompt);
-        CopilotTerminalLauncher.Launch($"-i \"{sanitized}\"", workingDirectory);
-        return Task.CompletedTask;
+        var color = await _terminalColors.PickAsync(null, cancellationToken).ConfigureAwait(false);
+        CopilotTerminalLauncher.Launch($"-i \"{sanitized}\"", workingDirectory, color);
     }
 }

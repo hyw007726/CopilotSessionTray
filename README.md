@@ -25,7 +25,9 @@ permission prompt or a question, shows a red dot and a bold "Needs input" on a
 light red row. Each row's buttons resume the session in a
 new terminal, show its summary or remove it from the list; below them, 📌 Pin
 keeps the session at the top of the list (marked with a small 📌, and kept even
-when it is old) and 🖥 Add sticker puts it on your desktop. Ticking "📌 Pinned
+when it is old) and 🖥 Add sticker puts it on your desktop; 🏷 Add label opens a small
+input box for a short label that then shows as a colored tag under the session's
+name (empty the box to remove it). Ticking "📌 Pinned
 only" at the top right of the popup narrows the list to just the pinned
 sessions. The slider at the
 bottom sets how see-through the stickers are. "🗒 Summary" shows what a session
@@ -38,7 +40,7 @@ new-task prompt.
 
 <table>
   <tr>
-    <td valign="top"><img src="docs/images/popup.png" width="340" alt="The session popup with a pinned session at the top; each row has Resume, Summary and Remove buttons above Pin or Unpin and Add or Remove sticker buttons"></td>
+    <td valign="top"><img src="docs/images/popup.png" width="340" alt="The session popup with a pinned session at the top; each row has a colored label under its name, Resume, Summary and Remove buttons, and below them Pin or Unpin, Add or Remove sticker and Add or Edit label buttons"></td>
     <td valign="top"><img src="docs/images/summary.png" width="480" alt="The Summary panel showing a session's overview and next steps"></td>
   </tr>
 </table>
@@ -72,6 +74,16 @@ it for the menu.
     <td valign="top"><img src="docs/images/menu.png" width="295" alt="The tray icon's right-click menu"></td>
   </tr>
 </table>
+
+**Terminal colors.** Every terminal the tray opens gets a color of its own, a bright
+tab and a dark pane of the same hue, so you can tell your terminals apart. Nine
+colors are handed out in the order numbered below (a drawing of them, not a
+screenshot), none of them red. The tab always shows; the pane needs a Copilot theme
+other than its default `github` one (see the end of this section).
+
+<p align="center">
+  <img src="docs/images/terminal-colors.png" width="560" alt="Nine sample terminals, each with a colored tab and a dark pane of the same hue: blue, orange, green, pink, gold, indigo, cyan, orchid and emerald">
+</p>
 
 ## Status
 
@@ -136,9 +148,9 @@ rows, the same small gold glyph as the tray icon in place of a plain dot
 implementations of all 9 contracts behind `Services/` — reading the real
 `open-sessions-state.json`/`session-store.db`/`inuse.<pid>.lock` files,
 checking real process liveness, launching real terminal sessions
-(resume/start-from-summary/start-new-task/headless, each in its own
-distinctly-colored terminal pane), and persisting this app's own
-dismissal markers, preferences, display-name overrides, pinned sessions and
+(resume/start-from-summary/start-new-task/headless, the visible ones each in a
+terminal tab and pane of its own color), and persisting this app's own
+dismissal markers, preferences, display-name overrides, pinned sessions, labels and
 stickers under `%LOCALAPPDATA%\CopilotSessionTray\`. The app starts directly on
 the **live** view (your real currently-open + 10 most-recent closed sessions,
 plus any you have pinned or given a sticker);
@@ -197,9 +209,11 @@ src/
                                        took and whether it waits on a permission prompt or a question),
                                        events.jsonl tailing, the rules behind the desktop
                                        stickers (their state, layout and gist), the sessions
-                                       pinned to the top of the list, when to alert you that a
-                                       session needs you, and how far a wheel event scrolls
-  CopilotSessionTray.Core.Tests/      xUnit tests (520), fixture-based — every service takes an optional
+                                       pinned to the top of the list, the labels put on sessions
+                                       and their colors, which colors the terminals it opens get,
+                                       when to alert you that a session needs you, and how far a
+                                       wheel event scrolls
+  CopilotSessionTray.Core.Tests/      xUnit tests (654), fixture-based — every service takes an optional
                                        path override so tests never touch the real .copilot folder (the
                                        launch-script tests also run the generated script through cmd.exe)
   CopilotSessionTray.App/             WPF tray shell, DI composition root in App.xaml.cs
@@ -210,6 +224,7 @@ src/
     MainWindow.xaml                   Hosts the TaskbarIcon + doubles as the click-to-show session popup
     BalloonWindow.xaml                One notification balloon: a transparent, non-activating window drawn as a glossy party balloon
     SessionSummaryWindow.xaml         The "🗒 Summary" panel: a session's summary as formatted, selectable text (SummaryDocumentBuilder.cs)
+    SessionLabelWindow.xaml           The "🏷 Add label" input box: one line of text for a session's label
     Stickers/                         StickerWindow (a borderless, always-on-top desktop sticker that never takes focus) + StickerManager (one per session with a sticker)
     TrayIconRenderer.cs               Draws the tray icon: exact-size, emboldened gold glyph + a radial glow from the palms (red while a session needs you)
     TrayIconStarter.cs                Creates the tray icon, retrying until Windows has a taskbar (the app started at logon before Explorer)
@@ -289,6 +304,16 @@ a pin or unpin takes effect in the list at once, and with nothing pinned the lis
 says "No pinned sessions" instead of staying blank. It filters the list and nothing
 else — the tray icon, its tooltip and the stickers still count every session, so
 a session that needs you turns the tray icon red even while its row is hidden.
+Give a session a label with its "🏷 Add label" button (it reads "🏷 Edit label" once the
+session has one): a small input box opens with the current label selected, Save keeps what
+you typed, Cancel changes nothing, and saving it empty removes the label. The label shows as
+a colored tag at the left, right under the session's name. It is one line of up to 40
+characters. The same text (in any case) always has the same color, and a new text takes
+the color, out of ten, that the fewest other labels use, so different labels look different
+for as long as the colors last; none is red, which is kept for a session that needs you. Labels
+are remembered across restarts, "✕ Remove" clears a row's label along with the row, and they
+show in the popup only (not on the stickers or in the history window). The popup stays up while
+the input box is open.
 Put a session on the desktop with
 its "🖥 Add sticker" button and a sticker for it appears, from the top-left
 corner down the left edge (wrapping into further columns). A sticker shows the
@@ -345,8 +370,21 @@ per wait: a second request while the first is still pending, or a click on the
 balloon, does not raise another. "Mute notifications" silences the balloon and the
 sound together. A wait that was already going when the app started is shown red
 but never rings, so starting or restarting the app does not replay old prompts.
-Each terminal this app opens (resume/start new task) gets its own
-distinct background color so concurrent panes are easy to tell apart.
+Each terminal this app opens (resume, start from a summary or start a new task) gets a
+color of its own, so terminals that are open together are easy to tell apart: a bright
+color on its Windows Terminal **tab** and a dark pane background of the same hue, out of
+nine colors, none red. A new terminal gets the color used least recently, a resumed
+session gets the color it had last time unless another terminal has taken it since, and
+the choice is remembered across restarts of the app (it used to start again from the
+first color, so the same one came up again and again). The tab color is set by Windows
+Terminal itself, so it always shows. The pane background is set with a terminal escape
+sequence, and Copilot's default `github` theme replaces it with its own dark background
+a few seconds after its interface starts; the other themes (`default`, `dim`,
+`high-contrast` and `colorblind`) keep it, so run `copilot config theme default` if you
+want the pane color too. That is a setting of Copilot itself, for every terminal you
+start it in and not only the ones the tray opens, and it takes effect in Copilot
+windows started after it; `copilot config theme github` puts it back. There is no
+per-launch switch for it: the CLI has no theme flag or environment variable.
 Quit is the only way to fully
 exit — closing the popup window just hides it.
 

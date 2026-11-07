@@ -260,5 +260,13 @@ public sealed class SessionPinsTests : IDisposable
         public Task<StickerSnapshot> GetStickersAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
         public Task SaveStickersAsync(StickerSnapshot snapshot, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<IReadOnlyDictionary<string, SessionLabel>> GetSessionLabelsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task SaveSessionLabelsAsync(IReadOnlyDictionary<string, SessionLabel> labels, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<IReadOnlyList<TerminalLaunch>> GetTerminalLaunchesAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task SaveTerminalLaunchesAsync(IReadOnlyList<TerminalLaunch> launches, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 }

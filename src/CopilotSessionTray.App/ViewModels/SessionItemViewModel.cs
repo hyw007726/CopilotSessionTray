@@ -182,6 +182,52 @@ public sealed partial class SessionItemViewModel : ObservableObject
     public System.Windows.Visibility PinGlyphVisibility =>
         IsPinned ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
 
+    /// <summary>The label the user put on this session, shown under its name, or null when it has none.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasLabel))]
+    [NotifyPropertyChangedFor(nameof(LabelVisibility))]
+    [NotifyPropertyChangedFor(nameof(LabelButtonText))]
+    [NotifyPropertyChangedFor(nameof(LabelButtonToolTip))]
+    private string? _label;
+
+    /// <summary>The palette slot that colors <see cref="Label"/>.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(LabelBackground))]
+    [NotifyPropertyChangedFor(nameof(LabelForeground))]
+    private int _labelColorIndex;
+
+    public bool HasLabel => !string.IsNullOrEmpty(Label);
+
+    public System.Windows.Visibility LabelVisibility =>
+        HasLabel ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
+
+    public string LabelButtonText => HasLabel ? "🏷 Edit label" : "🏷 Add label";
+
+    public string LabelButtonToolTip => HasLabel
+        ? "Change this session's label, or empty it to remove it"
+        : "Add a label that shows under this session's name";
+
+    public Brush LabelBackground => LabelBrushes[SessionLabelPalette.Wrap(LabelColorIndex)].Background;
+
+    public Brush LabelForeground => LabelBrushes[SessionLabelPalette.Wrap(LabelColorIndex)].Foreground;
+
+    internal void ApplyLabel(SessionLabel? label)
+    {
+        LabelColorIndex = label?.ColorIndex ?? 0;
+        Label = label?.Text;
+    }
+
+    private static readonly (Brush Background, Brush Foreground)[] LabelBrushes = SessionLabelPalette.Colors
+        .Select(color => (FrozenBrush(color.Background), FrozenBrush(color.Foreground)))
+        .ToArray();
+
+    private static Brush FrozenBrush(string hex)
+    {
+        var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
+        brush.Freeze();
+        return brush;
+    }
+
     [ObservableProperty]
     private string _gist = string.Empty;
 

@@ -114,6 +114,7 @@ public partial class App : Application
         services.AddSingleton<ISessionLauncher, SessionLauncher>();
         services.AddSingleton<IYoloTaskRunner, YoloTaskRunner>();
         services.AddSingleton<IAppStateStore, AppStateStore>();
+        services.AddSingleton<TerminalColors>();
         services.AddSingleton<ISessionEventStreamReader, SessionEventStreamReader>();
         services.AddSingleton<ISessionDetectionEngine, SessionDetectionEngine>();
         services.AddSingleton<StickerState>();

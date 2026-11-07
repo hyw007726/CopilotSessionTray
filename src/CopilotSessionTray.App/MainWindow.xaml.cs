@@ -265,7 +265,7 @@ public partial class MainWindow : Window
 
     private void Window_Deactivated(object? sender, EventArgs e)
     {
-        if (IsVisible)
+        if (IsVisible && !OwnedWindows.OfType<SessionLabelWindow>().Any())
         {
             Hide();
         }

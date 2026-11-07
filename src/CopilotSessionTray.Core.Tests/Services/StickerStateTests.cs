@@ -396,6 +396,14 @@ public sealed class StickerStateTests : IDisposable
         public Task<IReadOnlyList<string>?> GetPinnedSessionIdsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
         public Task SavePinnedSessionIdsAsync(IReadOnlyList<string> sessionIds, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<IReadOnlyDictionary<string, SessionLabel>> GetSessionLabelsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task SaveSessionLabelsAsync(IReadOnlyDictionary<string, SessionLabel> labels, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<IReadOnlyList<TerminalLaunch>> GetTerminalLaunchesAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task SaveTerminalLaunchesAsync(IReadOnlyList<TerminalLaunch> launches, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 
     private sealed class ManualTimeProvider : TimeProvider

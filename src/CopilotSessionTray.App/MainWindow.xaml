@@ -206,6 +206,18 @@
                                         </TextBlock.ToolTip>
                                     </TextBlock>
                                 </Grid>
+                                <Border HorizontalAlignment="Left"
+                                        Margin="0,2,0,1"
+                                        Padding="6,1,6,2"
+                                        CornerRadius="8"
+                                        Background="{Binding LabelBackground}"
+                                        Visibility="{Binding LabelVisibility}">
+                                    <TextBlock FontSize="10"
+                                               FontWeight="SemiBold"
+                                               Foreground="{Binding LabelForeground}"
+                                               Text="{Binding Label}"
+                                               TextTrimming="CharacterEllipsis" />
+                                </Border>
                                 <TextBlock FontSize="11"
                                            Foreground="Gray"
                                            TextWrapping="Wrap"
@@ -275,6 +287,11 @@
                                             Content="{Binding StickerButtonText}"
                                             ToolTip="{Binding StickerButtonToolTip}"
                                             Command="{Binding DataContext.ToggleStickerCommand, ElementName=RootWindow}"
+                                            CommandParameter="{Binding}" />
+                                    <Button Padding="5,2" Margin="4,0,0,0" FontSize="10"
+                                            Content="{Binding LabelButtonText}"
+                                            ToolTip="{Binding LabelButtonToolTip}"
+                                            Command="{Binding DataContext.EditLabelCommand, ElementName=RootWindow}"
                                             CommandParameter="{Binding}" />
                                 </StackPanel>
                             </StackPanel>

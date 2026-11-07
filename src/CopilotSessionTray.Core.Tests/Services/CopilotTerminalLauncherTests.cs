@@ -1,11 +1,13 @@
 using System.Diagnostics;
 using System.Text;
+using CopilotSessionTray.Core.Models;
 using CopilotSessionTray.Core.Services;
 
 namespace CopilotSessionTray.Core.Tests.Services;
 
 /// <summary>
-/// Exercises <see cref="CopilotTerminalLauncher"/> — script-content building and cmd.exe-safe
+/// Exercises <see cref="CopilotTerminalLauncher"/> — script-content building, <c>wt.exe</c> argument
+/// building and cmd.exe-safe
 /// sanitization — and, for the argument-delivery tests, runs the generated script for real against
 /// a stub <c>copilot.cmd</c>. Accessible here via <c>InternalsVisibleTo</c> (see Core.csproj)
 /// since these are deliberately not part of Core's public API.
@@ -15,7 +17,7 @@ public sealed class CopilotTerminalLauncherTests
     [Fact]
     public void BuildLaunchScriptContent_OmitsEnvSetup_WhenPermissionsNotEnabled()
     {
-        var content = CopilotTerminalLauncher.BuildLaunchScriptContent("--resume=abc123", enableAllPermissions: false, "1a1a2e");
+        var content = CopilotTerminalLauncher.BuildLaunchScriptContent("--resume=abc123", enableAllPermissions: false, "#1a1a2e");
 
         Assert.DoesNotContain("COPILOT_ALLOW_ALL", content);
         Assert.Contains("copilot --resume=abc123", content);
@@ -25,7 +27,7 @@ public sealed class CopilotTerminalLauncherTests
     [Fact]
     public void BuildLaunchScriptContent_IncludesEnvSetup_WhenPermissionsEnabled()
     {
-        var content = CopilotTerminalLauncher.BuildLaunchScriptContent("-i \"do the thing\"", enableAllPermissions: true, "1a1a2e");
+        var content = CopilotTerminalLauncher.BuildLaunchScriptContent("-i \"do the thing\"", enableAllPermissions: true, "#1a1a2e");
 
         Assert.Contains("set COPILOT_ALLOW_ALL=true", content);
         Assert.Contains("copilot -i \"do the thing\"", content);
@@ -37,7 +39,7 @@ public sealed class CopilotTerminalLauncherTests
     [Fact]
     public void BuildLaunchScriptContent_IncludesBackgroundColorEscapeSequence_BeforeTheCopilotInvocation()
     {
-        var content = CopilotTerminalLauncher.BuildLaunchScriptContent("--resume=abc123", enableAllPermissions: false, "3d0e0e");
+        var content = CopilotTerminalLauncher.BuildLaunchScriptContent("--resume=abc123", enableAllPermissions: false, "#3d0e0e");
 
         Assert.Contains("\u001b]11;#3d0e0e\u0007", content);
         Assert.True(content.IndexOf('\u001b') < content.IndexOf("copilot --resume", StringComparison.Ordinal));
@@ -46,7 +48,7 @@ public sealed class CopilotTerminalLauncherTests
     [Fact]
     public void BuildLaunchScriptContent_SwitchesToTheUtf8CodePage_BeforeTheCopilotInvocation()
     {
-        var content = CopilotTerminalLauncher.BuildLaunchScriptContent("--resume=abc123", enableAllPermissions: false, "1a1a2e");
+        var content = CopilotTerminalLauncher.BuildLaunchScriptContent("--resume=abc123", enableAllPermissions: false, "#1a1a2e");
 
         var codePageIndex = content.IndexOf("chcp 65001 >nul", StringComparison.Ordinal);
         Assert.True(codePageIndex > content.IndexOf("@echo off", StringComparison.Ordinal));
@@ -76,46 +78,62 @@ public sealed class CopilotTerminalLauncherTests
     [Fact]
     public void BuildBackgroundColorEscapeSequence_ProducesOsc11SequenceWithBelTerminator()
     {
-        var sequence = CopilotTerminalLauncher.BuildBackgroundColorEscapeSequence("1a1a2e");
+        var sequence = CopilotTerminalLauncher.BuildBackgroundColorEscapeSequence("#1a1a2e");
 
         Assert.Equal("\u001b]11;#1a1a2e\u0007", sequence);
     }
 
     [Fact]
-    public void GetNextBackgroundColorHex_ReturnsADifferentColor_OnTheImmediatelyNextCall()
+    public void BuildWindowsTerminalArguments_OpensANewTabWithTheTabColor_RunningTheScriptInTheDirectory()
     {
-        // Regardless of this static rotation's current position (shared mutable state across the
-        // whole test run/process, including real app usage), two *consecutive* calls must always
-        // land on adjacent — therefore different — palette slots.
-        var first = CopilotTerminalLauncher.GetNextBackgroundColorHex();
-        var second = CopilotTerminalLauncher.GetNextBackgroundColorHex();
+        var arguments = CopilotTerminalLauncher.BuildWindowsTerminalArguments(@"C:\Work\my project", @"C:\Temp\copilot-launch-1.cmd", "#699BF3");
 
-        Assert.NotEqual(first, second);
+        Assert.Equal(
+            ["new-tab", "--tabColor", "#699BF3", "-d", @"C:\Work\my project", "cmd", "/k", @"C:\Temp\copilot-launch-1.cmd"],
+            arguments);
     }
 
     [Fact]
-    public void GetNextBackgroundColorHex_AlwaysReturnsValidLowercaseHexWithNoHash()
+    public void PrepareLaunch_WritesAScriptWithThePaneColor_AndOpensItInATabWithTheAccentColor()
     {
-        var color = CopilotTerminalLauncher.GetNextBackgroundColorHex();
+        var color = new TerminalColor("Test", "#112233", "#AABBCC");
 
-        Assert.Matches("^[0-9a-f]{6}$", color);
-    }
-
-    [Fact]
-    public void GetNextBackgroundColorHex_CyclingThroughAFullPaletteLength_NeverRepeatsWithinThatSpan()
-    {
-        // Doesn't assume any particular starting index (see the note on shared static state
-        // above) — only that N consecutive calls, for N equal to the palette's own size, can
-        // never repeat a color within that single span, since each call always advances exactly
-        // one slot around a fixed-size ring of all-distinct entries.
-        const int paletteLength = 14; // kept in sync with BackgroundColorPalette's literal size.
-        var colors = new HashSet<string>();
-        for (var i = 0; i < paletteLength; i++)
+        var (scriptPath, arguments) = CopilotTerminalLauncher.PrepareLaunch("--resume=abc123", @"C:\Work", color, enableAllPermissions: true);
+        try
         {
-            colors.Add(CopilotTerminalLauncher.GetNextBackgroundColorHex());
+            var script = File.ReadAllText(scriptPath);
+            Assert.Contains("\u001b]11;#112233\u0007", script);
+            Assert.DoesNotContain("#AABBCC", script);
+            Assert.Contains("set COPILOT_ALLOW_ALL=true", script);
+            Assert.Contains("copilot --resume=abc123", script);
+            Assert.Equal(["new-tab", "--tabColor", "#AABBCC", "-d", @"C:\Work", "cmd", "/k", scriptPath], arguments);
+            Assert.StartsWith(Path.GetTempPath(), scriptPath);
+            Assert.EndsWith(".cmd", scriptPath);
         }
+        finally
+        {
+            File.Delete(scriptPath);
+        }
+    }
 
-        Assert.Equal(paletteLength, colors.Count);
+    [Fact]
+    public void PrepareLaunch_StartsInTheHomeDirectory_WhenNoDirectoryIsGiven_AndUsesAScriptOfItsOwnEachTime()
+    {
+        var color = TerminalPalette.At(0);
+
+        var (firstScript, firstArguments) = CopilotTerminalLauncher.PrepareLaunch("-i \"x\"", null, color, enableAllPermissions: false);
+        var (secondScript, _) = CopilotTerminalLauncher.PrepareLaunch("-i \"x\"", null, color, enableAllPermissions: false);
+        try
+        {
+            Assert.Equal(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), firstArguments[4]);
+            Assert.DoesNotContain("COPILOT_ALLOW_ALL", File.ReadAllText(firstScript));
+            Assert.NotEqual(firstScript, secondScript);
+        }
+        finally
+        {
+            File.Delete(firstScript);
+            File.Delete(secondScript);
+        }
     }
 
     [Theory]
@@ -156,7 +174,7 @@ public sealed class CopilotTerminalLauncherTests
                 $"@echo off\r\npowershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{capturePs1Path}\" %*\r\n");
             File.WriteAllText(
                 scriptPath,
-                CopilotTerminalLauncher.BuildLaunchScriptContent(copilotArguments, enableAllPermissions: false, "1a1a2e"));
+                CopilotTerminalLauncher.BuildLaunchScriptContent(copilotArguments, enableAllPermissions: false, "#1a1a2e"));
             File.WriteAllText(
                 wrapperPath,
                 $"@echo off\r\nchcp 850 >nul\r\nset \"PATH={directory};%PATH%\"\r\ncall \"{scriptPath}\"\r\n");
