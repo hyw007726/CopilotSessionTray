@@ -8,7 +8,7 @@
 
   <ItemGroup>
     <!-- Read-only access to session-store.db (Services/SessionHistoryStore.cs) — see IMPLEMENTATION_PLAN.md §2.2. -->
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.13" />
   </ItemGroup>
 
   <ItemGroup>
