@@ -536,6 +536,79 @@ public sealed class AppStateStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task GetNewTaskDraftAsync_ReturnsNothing_WhenNeverSaved()
+    {
+        Assert.Null(await CreateStore().GetNewTaskDraftAsync());
+    }
+
+    [Fact]
+    public async Task SaveNewTaskDraftAsync_RoundTripsEveryFieldExactly_AndNullRemovesIt()
+    {
+        IAppStateStore store = CreateStore();
+        var draft = new NewTaskDraft("  Fix the build\r\n\r\nthen add a test  ", @"C:\Work\Repo", true);
+
+        await store.SaveNewTaskDraftAsync(draft);
+
+        Assert.Equal(draft, await CreateStore().GetNewTaskDraftAsync());
+
+        await store.SaveNewTaskDraftAsync(null);
+
+        Assert.Null(await CreateStore().GetNewTaskDraftAsync());
+    }
+
+    [Fact]
+    public async Task SaveNewTaskDraftAsync_TreatsABlankPromptAsNoDraft()
+    {
+        IAppStateStore store = CreateStore();
+        await store.SaveNewTaskDraftAsync(new NewTaskDraft("text", @"C:\Work", false));
+
+        await store.SaveNewTaskDraftAsync(new NewTaskDraft("  \r\n ", @"C:\Work", true));
+
+        Assert.Null(await CreateStore().GetNewTaskDraftAsync());
+        Assert.Contains("\"newTaskDraft\": null", await File.ReadAllTextAsync(_stateFilePath));
+    }
+
+    [Fact]
+    public async Task NewTaskDraft_ReadsTheDocumentedFileFormat_AndToleratesAFileWrittenBeforeItExisted()
+    {
+        await File.WriteAllTextAsync(_stateFilePath, "{\"newTaskDraft\":{\"prompt\":\"Do it\",\"workspaceDirectory\":\"C:\\\\Work\",\"enableAllPermissions\":true}}");
+        Assert.Equal(new NewTaskDraft("Do it", @"C:\Work", true), await CreateStore().GetNewTaskDraftAsync());
+
+        await File.WriteAllTextAsync(_stateFilePath, "{\"readMarkers\":{},\"customDisplayNames\":{\"a\":\"My name\"},\"pinnedSessions\":[\"a\"]}");
+        Assert.Null(await CreateStore().GetNewTaskDraftAsync());
+    }
+
+    [Fact]
+    public async Task GetNewTaskDraftAsync_CleansUpAHandEditedFile()
+    {
+        await File.WriteAllTextAsync(_stateFilePath, "{\"newTaskDraft\":{\"prompt\":\"   \",\"workspaceDirectory\":\"C:\\\\Work\"}}");
+        Assert.Null(await CreateStore().GetNewTaskDraftAsync());
+
+        await File.WriteAllTextAsync(_stateFilePath, "{\"newTaskDraft\":null}");
+        Assert.Null(await CreateStore().GetNewTaskDraftAsync());
+
+        await File.WriteAllTextAsync(_stateFilePath, "{\"newTaskDraft\":{\"prompt\":\"Do it\",\"workspaceDirectory\":null}}");
+        Assert.Equal(new NewTaskDraft("Do it", string.Empty, false), await CreateStore().GetNewTaskDraftAsync());
+    }
+
+    [Fact]
+    public async Task NewTaskDraft_AndTheRestOfTheState_DoNotOverwriteEachOther()
+    {
+        IAppStateStore store = CreateStore();
+
+        await store.SetCustomDisplayNameAsync("session-1", "My name");
+        await store.SaveNewTaskDraftAsync(new NewTaskDraft("Do it", @"C:\Work", false));
+        await store.SavePinnedSessionIdsAsync(["session-2"]);
+        await store.SavePreferencesAsync((await store.GetPreferencesAsync()) with { ShowPinnedOnly = true });
+        await store.SetCustomDisplayNameAsync("session-1", "Another name");
+
+        Assert.Equal(new NewTaskDraft("Do it", @"C:\Work", false), await store.GetNewTaskDraftAsync());
+        Assert.Equal("Another name", await store.GetCustomDisplayNameAsync("session-1"));
+        Assert.Equal(["session-2"], await store.GetPinnedSessionIdsAsync());
+        Assert.True((await store.GetPreferencesAsync()).ShowPinnedOnly);
+    }
+
+    [Fact]
     public async Task MutateAsync_CreatesParentDirectory_WhenMissing()
     {
         var nestedPath = Path.Combine(Path.GetTempPath(), $"appstate-tests-nested-{Guid.NewGuid():N}", "app-state.json");

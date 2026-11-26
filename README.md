@@ -211,9 +211,10 @@ src/
                                        stickers (their state, layout and gist), the sessions
                                        pinned to the top of the list, the labels put on sessions
                                        and their colors, which colors the terminals it opens get,
-                                       when to alert you that a session needs you, and how far a
-                                       wheel event scrolls
-  CopilotSessionTray.Core.Tests/      xUnit tests (654), fixture-based — every service takes an optional
+                                       when to alert you that a session needs you, the unfinished
+                                       input of the new-task panel, and how far a wheel event
+                                       scrolls
+  CopilotSessionTray.Core.Tests/      xUnit tests (688), fixture-based — every service takes an optional
                                        path override so tests never touch the real .copilot folder (the
                                        launch-script tests also run the generated script through cmd.exe)
   CopilotSessionTray.App/             WPF tray shell, DI composition root in App.xaml.cs
@@ -225,6 +226,7 @@ src/
     BalloonWindow.xaml                One notification balloon: a transparent, non-activating window drawn as a glossy party balloon
     SessionSummaryWindow.xaml         The "🗒 Summary" panel: a session's summary as formatted, selectable text (SummaryDocumentBuilder.cs)
     SessionLabelWindow.xaml           The "🏷 Add label" input box: one line of text for a session's label
+    NewTaskWindow.xaml                The "Start new task" panel: prompt, workspace and permissions, with what you typed kept as a draft
     Stickers/                         StickerWindow (a borderless, always-on-top desktop sticker that never takes focus) + StickerManager (one per session with a sticker)
     TrayIconRenderer.cs               Draws the tray icon: exact-size, emboldened gold glyph + a radial glow from the palms (red while a session needs you)
     TrayIconStarter.cs                Creates the tray icon, retrying until Windows has a taskbar (the app started at logon before Explorer)
@@ -314,6 +316,19 @@ for as long as the colors last; none is red, which is kept for a session that ne
 are remembered across restarts, "✕ Remove" clears a row's label along with the row, and they
 show in the popup only (not on the stickers or in the history window). The popup stays up while
 the input box is open.
+The "Start new task…" panel (a double-click on the tray icon, or the menu entry) keeps what you
+type as a draft. Close it with Cancel, Esc or ✕, or quit and start the app again, and the next
+time it opens the prompt, the workspace and the "Enable all permissions" tick are back, with
+the cursor at the end of the prompt and a small "Draft restored" note. Clearing the
+prompt box discards the draft; starting the task uses it up, and it is kept if the launch fails.
+A draft exists only while the prompt has text, and it is saved, as plain text, in
+`app-state.json` a moment after you stop typing (and at once when the panel closes or the app
+quits). The panel opens in the bottom-right corner next to the tray, where the popup does. It is an
+ordinary window: it is not always on top, and it does not block the rest
+of the tray, so clicking another window puts that window in front of it and the popup, the
+stickers and the balloons keep working while it is open. There is only ever one panel: a
+double-click while it is open (or choosing "Start new task…" again) brings that one back to the
+front with whatever is in it, instead of opening a blank second one.
 Put a session on the desktop with
 its "🖥 Add sticker" button and a sticker for it appears, from the top-left
 corner down the left edge (wrapping into further columns). A sticker shows the

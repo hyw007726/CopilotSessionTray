@@ -118,6 +118,7 @@ public partial class App : Application
         services.AddSingleton<ISessionEventStreamReader, SessionEventStreamReader>();
         services.AddSingleton<ISessionDetectionEngine, SessionDetectionEngine>();
         services.AddSingleton<StickerState>();
+        services.AddSingleton<NewTaskDraftState>();
         services.AddSingleton(provider => new StickerManager(
             provider.GetRequiredService<TrayViewModel>(),
             provider.GetRequiredService<StickerState>(),

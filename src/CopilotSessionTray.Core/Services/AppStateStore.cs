@@ -7,7 +7,7 @@ namespace CopilotSessionTray.Core.Services;
 
 /// <summary>
 /// Real implementation of <see cref="IAppStateStore"/> — persists this
-/// app's own state (read markers, preferences, custom display names, sticker pins, panel pins, session labels, terminal colors) as a
+/// app's own state (read markers, preferences, custom display names, sticker pins, panel pins, session labels, terminal colors, the new-task draft) as a
 /// single small JSON file under <c>%LOCALAPPDATA%\CopilotSessionTray\</c>,
 /// entirely separate from anything under <c>.copilot</c>. A
 /// <see cref="SemaphoreSlim"/> serializes read-modify-write operations
@@ -187,6 +187,27 @@ public sealed class AppStateStore : IAppStateStore
             cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<NewTaskDraft?> GetNewTaskDraftAsync(CancellationToken cancellationToken = default)
+    {
+        var state = await LoadAsync(cancellationToken).ConfigureAwait(false);
+        return state.NewTaskDraft is { } stored && !string.IsNullOrWhiteSpace(stored.Prompt)
+            ? new NewTaskDraft(stored.Prompt, stored.WorkspaceDirectory ?? string.Empty, stored.EnableAllPermissions)
+            : null;
+    }
+
+    public async Task SaveNewTaskDraftAsync(NewTaskDraft? draft, CancellationToken cancellationToken = default)
+    {
+        await MutateAsync(state => state.NewTaskDraft = draft is null || string.IsNullOrWhiteSpace(draft.Prompt)
+            ? null
+            : new StoredNewTaskDraft
+            {
+                Prompt = draft.Prompt,
+                WorkspaceDirectory = draft.WorkspaceDirectory,
+                EnableAllPermissions = draft.EnableAllPermissions,
+            },
+            cancellationToken).ConfigureAwait(false);
+    }
+
     private static List<string> CleanIds(IEnumerable<string?> sessionIds) =>
         sessionIds.Where(id => !string.IsNullOrWhiteSpace(id)).Select(id => id!).Distinct().ToList();
 
@@ -265,6 +286,17 @@ public sealed class AppStateStore : IAppStateStore
         public Dictionary<string, StoredLabel?>? SessionLabels { get; set; }
 
         public List<StoredTerminalLaunch?>? TerminalLaunches { get; set; }
+
+        public StoredNewTaskDraft? NewTaskDraft { get; set; }
+    }
+
+    private sealed class StoredNewTaskDraft
+    {
+        public string? Prompt { get; set; }
+
+        public string? WorkspaceDirectory { get; set; }
+
+        public bool EnableAllPermissions { get; set; }
     }
 
     private sealed class StoredLabel

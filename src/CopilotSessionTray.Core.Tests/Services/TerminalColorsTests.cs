@@ -301,5 +301,9 @@ public sealed class TerminalColorsTests : IDisposable
         public Task<IReadOnlyDictionary<string, SessionLabel>> GetSessionLabelsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
         public Task SaveSessionLabelsAsync(IReadOnlyDictionary<string, SessionLabel> labels, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<NewTaskDraft?> GetNewTaskDraftAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task SaveNewTaskDraftAsync(NewTaskDraft? draft, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 }

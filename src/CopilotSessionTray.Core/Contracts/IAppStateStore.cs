@@ -5,8 +5,8 @@ namespace CopilotSessionTray.Core.Contracts;
 /// <summary>
 /// Persists this application's own state — read/unread markers, user
 /// preferences, local display-name overrides, sticker settings and pins, the sessions pinned
-/// to the top of the panel, the labels put on sessions, and the colors of the terminals it
-/// opened — entirely separate from
+/// to the top of the panel, the labels put on sessions, the colors of the terminals it
+/// opened, and the draft of the "Start a new task" panel — entirely separate from
 /// Copilot CLI's <c>.copilot</c> folder (typically under
 /// <c>%LOCALAPPDATA%\CopilotSessionTray\</c>). Copilot CLI has no native
 /// "unread" concept; this app owns it end to end.
@@ -89,5 +89,14 @@ public interface IAppStateStore
     /// <param name="launches">The opened terminals, newest first.</param>
     /// <param name="cancellationToken">Token to cancel the operation.</param>
     Task SaveTerminalLaunchesAsync(IReadOnlyList<TerminalLaunch> launches, CancellationToken cancellationToken = default);
+
+    /// <summary>Gets the draft of the "Start a new task" panel, or null if there is none.</summary>
+    /// <param name="cancellationToken">Token to cancel the operation.</param>
+    Task<NewTaskDraft?> GetNewTaskDraftAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Replaces the saved draft of the "Start a new task" panel; null removes it.</summary>
+    /// <param name="draft">The draft to persist, or null for none.</param>
+    /// <param name="cancellationToken">Token to cancel the operation.</param>
+    Task SaveNewTaskDraftAsync(NewTaskDraft? draft, CancellationToken cancellationToken = default);
 }
 

@@ -110,7 +110,8 @@ public sealed partial class TrayViewModel : ObservableObject
         IAppStateStore appStateStore,
         ISessionDetectionEngine detectionEngine,
         INotificationService notificationService,
-        StickerState stickerState)
+        StickerState stickerState,
+        NewTaskDraftState newTaskDraft)
     {
         _liveSessionsReader = liveSessionsReader;
         _liveProcessChecker = liveProcessChecker;
@@ -123,6 +124,7 @@ public sealed partial class TrayViewModel : ObservableObject
         _detectionEngine = detectionEngine;
         _notificationService = notificationService;
         _stickerState = stickerState;
+        _newTaskDraft = newTaskDraft;
         _sessionPins = new SessionPins(appStateStore);
         _sessionLabels = new SessionLabels(appStateStore);
 
@@ -563,30 +565,6 @@ public sealed partial class TrayViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Opens the "new task" panel (prompt + workspace picker, pre-filled from the last-used
-    /// workspace via <see cref="IAppStateStore"/>), then starts it via
-    /// <see cref="IYoloTaskRunner.StartInteractiveAsync"/> on "Start".
-    /// </summary>
-    [RelayCommand]
-    private async Task StartYoloTask()
-    {
-        var lastWorkspace = (await _appStateStore.GetPreferencesAsync()).LastNewTaskWorkspaceDirectory;
-
-        var window = new NewTaskWindow(lastWorkspace) { Owner = TryGetOwnerWindow() };
-        if (window.ShowDialog() != true)
-        {
-            return; // user cancelled.
-        }
-
-        var preferences = await _appStateStore.GetPreferencesAsync();
-        await _appStateStore.SavePreferencesAsync(preferences with { LastNewTaskWorkspaceDirectory = window.WorkspaceDirectory });
-
-        await TryLaunchAsync(
-            () => _yoloTaskRunner.StartInteractiveAsync(window.Prompt, window.WorkspaceDirectory, window.EnableAllPermissions),
-            "new task");
-    }
-
-    /// <summary>
     /// Runs a real process-launch action from <see cref="ISessionLauncher"/>/<see cref="IYoloTaskRunner"/>
     /// (both retrofitted per IMPLEMENTATION_PLAN.md §9.1 — this used to be a private
     /// <c>LaunchCopilotInTerminal</c> method here with its own try/catch; the launch logic itself
@@ -595,11 +573,13 @@ public sealed partial class TrayViewModel : ObservableObject
     /// </summary>
     /// <param name="launch">The launch action to run.</param>
     /// <param name="context">A short label identifying what was being launched, used only in the error message.</param>
-    private static async Task TryLaunchAsync(Func<Task> launch, string context)
+    /// <returns><see langword="true"/> if the launch ran; <see langword="false"/> if Windows Terminal couldn't be started.</returns>
+    private static async Task<bool> TryLaunchAsync(Func<Task> launch, string context)
     {
         try
         {
             await launch();
+            return true;
         }
         catch (System.ComponentModel.Win32Exception)
         {
@@ -609,6 +589,7 @@ public sealed partial class TrayViewModel : ObservableObject
                 "Copilot Session Tray",
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
+            return false;
         }
     }
 

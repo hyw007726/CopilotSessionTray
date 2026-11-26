@@ -426,5 +426,9 @@ public sealed class SessionLabelsTests : IDisposable
         public Task<IReadOnlyList<TerminalLaunch>> GetTerminalLaunchesAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
         public Task SaveTerminalLaunchesAsync(IReadOnlyList<TerminalLaunch> launches, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<NewTaskDraft?> GetNewTaskDraftAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task SaveNewTaskDraftAsync(NewTaskDraft? draft, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 }
